@@ -2,11 +2,9 @@ module i2s_transmitter (
     input  logic        clk100mhz,
     input  logic        rst,
 
-    // User interface
-    input  logic        ready,       // pulse high for one clk_100m cycle when sample is valid
+    input  logic        ready,       // pulse high for one clk100mhz cycle when sample is valid
     input  logic [23:0] sample,      // 24-bit signed audio sample
 
-    // I2S outputs
     output logic        mclk,
     output logic        sclk,
     output logic        lrclk,
@@ -20,8 +18,7 @@ module i2s_transmitter (
         if (rst) begin
             sclk_div <= 0;
             sclk     <= 0;
-        end
-        else begin
+        end else begin
             sclk_div <= sclk_div + 1'b1;
 
             if (sclk_div == 2'd1)
