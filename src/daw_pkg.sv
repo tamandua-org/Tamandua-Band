@@ -12,7 +12,7 @@ package daw_pkg;
     localparam SONG_POS_BITS = 16; // 16 bits = max ~65k semiquavers (~1.5 hours at 120BPM)
 
     typedef enum logic [3:0] {
-        PIANO,
+        PIANO = 0,
         SNARE,
         KICK,
         HIHAT,
@@ -21,8 +21,8 @@ package daw_pkg;
         GUITAR
     } instrument_t;
 
-    // -64 to +63
-    typedef logic signed [NOTE_DELTA_BITS-1:0] note_delta_t;
+    // 0 to 127
+    typedef logic [NOTE_DELTA_BITS-1:0] note_delta_t;
 
     // pattern cell
     typedef struct packed {
