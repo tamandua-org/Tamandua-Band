@@ -27,7 +27,7 @@ module dawController (
     output logic        clear_pattern_pulse, // Tells the RAM to wipe the current pattern
     output logic        live_note_valid,
     output logic        live_note_off, 
-    output logic [7:0]  live_pitch,
+    output note_delta_t  live_pitch,
     output logic        ram_write_enable
 );
 
@@ -113,7 +113,7 @@ module dawController (
     assign mode_record = (current_mode == MODE_RECORD);
 
     logic [3:0] current_octave;
-    note_delta_t ui_active_note_slot;
+    //note_delta_t ui_active_note_slot;
     logic [4:0] countdown_timer;
     logic       countdown_active;
 
@@ -242,11 +242,13 @@ always_ff @(posedge clk) begin
                         
                         MODE_RECORD, MODE_LIVE: begin
                             case (active_scancode)
-                                8'h0D: begin // tab
-                                    if (ui_active_instrument == GUITAR) 
-                                        ui_active_instrument <= PIANO;
-                                    else 
-                                        ui_active_instrument <= instrument_t'(ui_active_instrument + 1'b1);
+                                8'h0D: begin // tab allowed only if live mode
+                                    if (current_mode == MODE_LIVE) begin
+                                        if (ui_active_instrument == GUITAR) 
+                                            ui_active_instrument <= PIANO;
+                                        else 
+                                            ui_active_instrument <= instrument_t'(ui_active_instrument + 1'b1);
+                                    end
                                 end
                                 8'h41: if (current_octave > 0) current_octave <= current_octave - 1'b1; // ,
                                 8'h49: if (current_octave < 8) current_octave <= current_octave + 1'b1; // .
@@ -256,7 +258,7 @@ always_ff @(posedge clk) begin
                                     for (int i = 0; i < 13; i++) begin
                                         if (active_scancode == NOTE_MAPPED_KEYS[i]) begin
                                             live_note_valid <= 1'b1;
-                                            live_pitch <= (current_octave * 8'd12) + 8'd12 + 8'(i); //we use midi standard Do4 is pitch 60
+                                            live_pitch <= (current_octave * 7'd12) + 7'd12 + 7'(i); //we use midi standard Do4 is pitch 60
                                             
                                             if (current_mode == MODE_RECORD) ram_write_enable <= 1'b1;
                                         end
