@@ -16,7 +16,8 @@ module dawController (
     output note_delta_t               ui_active_note_slot,
     output logic [7:0]               bpm_out,
     output logic                     is_playing,        // 1 = Sequencer running, 0 = Paused
-    output logic [5:0]               manual_step_offset,// For moving through steps manually
+    output logic step_forward_pulse,
+    output logic step_backward_pulse,
     
     // --- Mode Flags (For the Visualizer) ---
     output logic        mode_normal,
@@ -25,10 +26,9 @@ module dawController (
     
     // --- Action Pulses ---
     output logic        clear_pattern_pulse, // Tells the RAM to wipe the current pattern
-    output logic        live_note_valid,
+    output logic        live_note_on,
     output logic        live_note_off, 
-    output note_delta_t  live_pitch,
-    output logic        ram_write_enable
+    output note_delta_t  live_pitch
 );
 
     localparam logic [7:0] NOTE_MAPPED_KEYS [0:12] = '{
@@ -125,11 +125,11 @@ always_ff @(posedge clk) begin
             ui_active_instrument <= PIANO;
             bpm_out              <= 8'd120;
             is_playing           <= 1'b1;
-            manual_step_offset   <= '0;
+            step_forward_pulse   <= '0;
+            step_backward_pulse   <= '0;
             clear_pattern_pulse  <= 1'b0;
-            live_note_valid      <= 1'b0;
+            live_note_on      <= 1'b0;
             live_note_off        <= 1'b0;
-            ram_write_enable     <= 1'b0;
             current_octave       <= 3'd4; 
             ui_active_note_slot  <= 7'd60; // start at Do4        
             countdown_active     <= 1'b0;
@@ -137,10 +137,10 @@ always_ff @(posedge clk) begin
         end else begin
             // Reset 1-cycle pulses
             clear_pattern_pulse <= 1'b0;
-            live_note_valid     <= 1'b0;
+            live_note_on     <= 1'b0;
             live_note_off       <= 1'b0;
-            ram_write_enable    <= 1'b0;
-
+            step_forward_pulse  <= 1'b0;
+            step_backward_pulse <= 1'b0;
 
             // RECORDING COUNTDOWN TIMER LOGIC
             // This runs independently of user input
@@ -193,8 +193,8 @@ always_ff @(posedge clk) begin
                                 8'h45: ui_active_pattern <= 4'd9; // 0
                                 
                                 // vim-like navigation
-                                8'h33: if (!is_playing) manual_step_offset <= manual_step_offset - 1'b1; // H (step back)
-                                8'h4B: if (!is_playing) manual_step_offset <= manual_step_offset + 1'b1; // L (step forward)
+                                8'h33: if (!is_playing) step_backward_pulse <= 1'b1; // H (step back)
+                                8'h4B: if (!is_playing) step_forward_pulse  <= 1'b1; // L (step forward)
                                 8'h3B: if (ui_active_note_slot > 0) ui_active_note_slot <= ui_active_note_slot - 1; // J (Note Down)
                                 8'h42: if (ui_active_note_slot < 127) ui_active_note_slot <= ui_active_note_slot + 1; // K (Note Up)
 
@@ -257,10 +257,8 @@ always_ff @(posedge clk) begin
                                 default: begin
                                     for (int i = 0; i < 13; i++) begin
                                         if (active_scancode == NOTE_MAPPED_KEYS[i]) begin
-                                            live_note_valid <= 1'b1;
-                                            live_pitch <= (current_octave * 7'd12) + 7'd12 + 7'(i); //we use midi standard Do4 is pitch 60
-                                            
-                                            if (current_mode == MODE_RECORD) ram_write_enable <= 1'b1;
+                                            live_note_on <= 1'b1;
+                                            live_pitch <= (current_octave * 7'd12) + 7'd12 + 7'(i); //we use midi standard, Do4 is pitch 60
                                         end
                                     end
                                 end
@@ -274,7 +272,7 @@ always_ff @(posedge clk) begin
                         live_note_off <= 1'b1; 
                         // maybe a bug when changing the octave mid note playing may start at Do5 and move to Do6 then release key, 
                         // and we will remove Do6 and Do5 will keep playing ? not sure because it depends on how we handle key presses.
-                        live_pitch    <= (current_octave * 8'd12) + 8'd12 + 8'(i);  
+                        live_pitch    <= (current_octave * 7'd12) + 7'd12 + 7'(i);  
                     end
                 end
                 

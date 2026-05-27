@@ -5,8 +5,9 @@ module bpmClockDivider #(
 ) (
     input  logic                clk,
     input  logic                rst,
+    input  logic bpmRequired,
     input  logic [BPM_BITS-1:0] currentBpm,         // current BPM (runtime)
-    output logic                semiquaverTick  // one-cycle pulse per semiquaver
+    output logic                semiquaver_tick  // one-cycle pulse per semiquaver
 );
     
     // we have bpm / 60 x 4 semiquavers/second. 
@@ -31,14 +32,14 @@ module bpmClockDivider #(
     end
  
     always_ff @(posedge clk) begin
-        if (rst) begin
+        if (rst || !bpmRequired) begin
             counter <= 32'd0;
-            semiquaverTick <= 1'b0;
+            semiquaver_tick <= 1'b0;
         end else begin
-            semiquaverTick <= 1'b0; // default: no tick
+            semiquaver_tick <= 1'b0; // default: no tick
  
             if (counter == 32'd0) begin
-                semiquaverTick <= 1'b1;
+                semiquaver_tick <= 1'b1;
                 counter <= period - 32'd1;
             end else begin
                 counter <= counter - 32'd1;

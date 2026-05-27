@@ -1,175 +1,159 @@
+import daw_pkg::*;
+
 module tamanduaBand (
     input  logic        clk,
     input  logic        rst,
     input  logic        ps2Clk,
     input  logic        ps2Data,
     
-    output logic mclk,
-    output logic lrclk,
-    output logic sclk,
-    output logic sdata,
+    output logic        mclk,
+    output logic        lrclk,
+    output logic        sclk,
+    output logic        sdata,
     output logic        hSync,
     output logic        vSync,
     output logic [11:0] RGB
 );
 
-
-  localparam int FREQ_KHZ = 100_000;
-  localparam int VGA_KHZ  = 25_000;
-  localparam int FREQ_DIV = FREQ_KHZ / VGA_KHZ;
-
-  localparam int COLSxLINE  = 80;
-  localparam int ROWSxFRAME = 30;
-
-  localparam logic [11:0] BGCOLOR = '0;
-  localparam logic [11:0] FGCOLOR = 'h0F0;
-
-  logic rstSync;
-
-  logic [7:0] key;
-  logic keyRdy;
-
-  logic [$clog2(COLSxLINE)-1:0] x = '0;
-  logic [$clog2(ROWSxFRAME)-1:0] y = '0;
-
-  logic [$bits(x)-1:0] col;
-  logic [$bits(y)-1:0] row;
-  logic [3:0] uRow;
-  logic [2:0] uCol;
-  
-  logic [11:0] RGBinterface;
-
-  logic shiftP = 1'b0;
-  logic capsOn = 1'b0;
-
-  logic [7:0] char = '0;
-  logic charRdy = 1'b0;
-
-  logic clear = 1'b0;
-  logic newLine = 1'b0;
-
-  synchronizer #(.STAGES(2), .XPOL('0)) rstSynchronizer (.clk(clk), .x(rst), .xSync (rstSync));
-  ps2receiver ps2KeyboardInterface (.clk(clk), .rst(rstSync), .dataRdy(keyRdy), .data(key), .ps2Clk(ps2Clk), .ps2Data(ps2Data));
-
-  // Key Scanner
-  typedef enum logic {keyON, keyOFF} state_t;
-  state_t state = keyON;
-
-  always_ff @(posedge clk) begin
-    if (rstSync) begin
-      state    <= keyON;
-      shiftP   <= 1'b0;
-      capsOn   <= 1'b0;
-      charRdy  <= 1'b0;
-      newLine  <= 1'b0;
-      clear    <= 1'b0;
-    end else begin
-      charRdy <= 1'b0;
-      newLine <= 1'b0;
-      clear   <= 1'b0;
-      
-      if (keyRdy) begin
-        case (state)
-            keyON: begin
-             if (key == 8'hF0) begin
-                state <= keyOFF;  // key has been released
-              end else begin
-                case (key)
-                  8'h12, 8'h59: begin // SHIFT (l/r)
-                    shiftP <= 1;
-                  end
+    localparam int FREQ_KHZ = 100_000;
+    localparam int VGA_KHZ  = 25_000;
+    localparam int FREQ_DIV = FREQ_KHZ / VGA_KHZ;
     
-                  8'h58: begin // CAPS LOCK
-                    capsOn <= ~capsOn;
-                  end
+    logic rstSync;
     
-                  8'h76: begin // ESC
-                    clear <= 1;
-                  end
+    synchronizer #(.STAGES(2), .XPOL('0)) rstSynchronizer (.clk(clk), .x(rst), .xSync (rstSync));
     
-                  8'h5A: begin // ENTER
-                    newLine <= 1;
-                  end
+    logic [7:0] key;
+    logic keyRdy;
     
-                  default: begin
-                    // char
-                    char <= key;
-                    charRdy <= 1;
-                  end
+    ps2receiver ps2KeyboardInterface (.clk(clk), .rst(rstSync), .dataRdy(keyRdy), .data(key), .ps2Clk(ps2Clk), .ps2Data(ps2Data));
     
-                endcase
-              end
+    logic semiquaver_tick;
+    logic [7:0] bpm_out;
+    
+    bpmClockDivider #(.CLK_FREQ_HZ(FREQ_KHZ * 1000)) bpmClkGen (
+        .clk(clk), 
+        .rst(rstSync), 
+        .bpmRequired(1'b1), // for now kept at 1
+        .currentBpm(bpm_out), 
+        .semiquaver_tick(semiquaver_tick)
+    );
+    
+    logic [NUM_PATTERNS-1:0]    mute_mask;
+    logic [PATTERN_ID_BITS-1:0] ui_active_pattern;
+    instrument_t                ui_active_instrument;
+    note_delta_t                ui_active_note_slot;
+    logic                       is_playing;
+    logic step_forward_pulse;
+    logic step_backward_pulse;
+    logic                       mode_normal, mode_live, mode_record;
+    logic                       clear_pattern_pulse;
+    logic                       live_note_on, live_note_off;
+    note_delta_t                live_pitch;
+    logic                       ram_write_enable;
+    
+    dawController controller (
+        .clk(clk), 
+        .rst(rstSync), 
+        .keyRdy(keyRdy), 
+        .key(key), 
+        .semiquaver_tick(semiquaver_tick),
+        // Outputs
+        .mute_mask(mute_mask),
+        .ui_active_pattern(ui_active_pattern),
+        .ui_active_instrument(ui_active_instrument),
+        .ui_active_note_slot(ui_active_note_slot),
+        .bpm_out,
+        .is_playing(is_playing),
+        .step_forward_pulse(step_forward_pulse),
+        .step_backward_pulse(step_backward_pulse),
+        .mode_normal(mode_normal),
+        .mode_live(mode_live),
+        .mode_record(mode_record),
+        .clear_pattern_pulse(clear_pattern_pulse),
+        .live_note_on(live_note_on),
+        .live_note_off(live_note_off),
+        .live_pitch(live_pitch)
+    );
+
+    instrument_t instrument_regs [NUM_PATTERNS];
+
+    always_ff @(posedge clk) begin
+        if (rstSync) begin
+            for (int i = 0; i < NUM_PATTERNS; i++) begin
+                instrument_regs[i] <= PIANO;
             end
-            
-            keyOFF: begin
-              state <= keyON;
+        end else begin
+            instrument_regs[ui_active_pattern] <= ui_active_instrument; // save changed instrument to the current pattern
+        end
+    end
     
-              case (key)
-                8'h12, 8'h59: begin
-                  shiftP <= 1'b0;  // shift released
-                end
-                default: begin // ignore
-                end
-              endcase
-            end
-        endcase
-      end
-    end
-  end
-
-  // ROM Address + ASCII
-  assign ps2ToAsciiAddr = {capsOn ^ shiftP, char};
-  logic [8:0] ps2ToAsciiAddr;
-  logic [7:0] asciiCode;
-
-  ps2ToAsciiMap ps2ToAscii (.clk(clk), .a(ps2ToAsciiAddr), .qspo(asciiCode));
-
-
-logic [$bits(x)-1:0] x_wr;
-logic [$bits(y)-1:0] y_wr;
-
-always_ff @(posedge clk) begin //1 key delay to match rom access 
-  if (rstSync || clear) begin
-    x <= 0;
-    y <= 0;
-    x_wr <= 0;
-    y_wr <= 0;
-  end else begin
-    if (charRdy) begin
-      x_wr <= x;
-      y_wr <= y;
-
-      if (x == COLSxLINE - 1) begin
-        x <= 0;
-        y <= (y == ROWSxFRAME - 1) ? 0 : y + 1;
-      end else begin
-        x <= x + 1;
-      end
-    end else if (newLine) begin
-      x <= 0;
-      y <= (y == ROWSxFRAME - 1) ? 0 : y + 1;
-    end
-  end
-end
+    logic [5:0]  current_playback_step;
+    logic        engine_req;
+    logic [9:0]  engine_addr;
+    pattern_col_t engine_rdata;
+    logic        engine_valid;
     
-  logic charRdy_d; //1 cycle delay to match rom access
-  always_ff @(posedge clk) begin
-    if (rstSync) begin
-        charRdy_d <= 0;
-    end else begin
-        charRdy_d <= charRdy;
-    end
-  end
+    // outputs for voice allocator
+    note_event_t note_on_event, note_off_event;
+    logic        note_on_valid, note_off_valid;
+    
+    patternEngine engine (
+        .clk(clk),
+        .rst(rstSync),
+        .semiquaver_tick(semiquaver_tick),
+        .is_playing(is_playing),
+        .step_forward_pulse(step_forward_pulse),
+        .step_backward_pulse(step_backward_pulse),
+        .mute_mask(mute_mask),
+        .current_playback_step(current_playback_step),
+        
+        // handshake interface to BRAM
+        .ram_req(engine_req),
+        .ram_addr(engine_addr),
+        .ram_rdata(engine_rdata),
+        .ram_valid(engine_valid),
+        
+        .instrument_regs(instrument_regs), //we give access to the registers to the pattern engine
+        
+        .note_on_event(note_on_event),
+        .note_on_valid(note_on_valid),
+        .note_off_event(note_off_event),
+        .note_off_valid(note_off_valid)
+    );
+    
+    logic         ui_req   = 1'b0;
+    logic [9:0]   ui_addr  = '0;
+    pattern_col_t ui_rdata;
+    logic         ui_valid;
 
-  vgaTextInterface #(.FREQ_DIV(FREQ_DIV), .BGCOLOR(BGCOLOR), .FGCOLOR(FGCOLOR)) screenInterface 
-    (.clk, .rst(rstSync), .clear, .dataRdy(charRdy_d), .x(x_wr), .y(y_wr), .char(asciiCode), .col, .uCol, .row, .uRow, .hSync, .vSync, .RGB(RGBinterface));
-
-  // Cursor Render
-  always_comb begin
-    RGB = RGBinterface;
-    if (x == col && y == row) begin
-        RGB = '1;
-    end
-  end
+    patternRamWrapper memory_wrapper (
+        .clk(clk),
+        .rst(rstSync),
+        
+        // Port A.1 pattern engine
+        .engine_req(engine_req),
+        .engine_addr(engine_addr),
+        .engine_rdata(engine_rdata),
+        .engine_valid(engine_valid),
+        
+        // Port A.2 UI
+        .ui_req(ui_req),
+        .ui_addr(ui_addr),
+        .ui_rdata(ui_rdata),
+        .ui_valid(ui_valid),
+        
+        // Port B live writes for record mode
+        .semiquaver_tick(semiquaver_tick),
+        .record_mode(mode_record), // Map mode_record to the record_mode input
+        .current_playback_step(current_playback_step),
+        .live_note_on(live_note_on),
+        .live_note_off(live_note_off),
+        .live_pitch(live_pitch),
+        .clear_pattern_pulse(clear_pattern_pulse),
+        .ui_active_pattern(ui_active_pattern)
+    );
+    
+    i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(), .sample(), .mclk, .sclk, .lrclk, .sdata);
 
 endmodule
