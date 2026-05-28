@@ -29,7 +29,11 @@ set_property -dict { PACKAGE_PIN G2 IOSTANDARD LVCMOS33 } [get_ports sdata]; # s
 set_property -dict { PACKAGE_PIN C17 IOSTANDARD LVCMOS33 PULLUP true } [get_ports ps2Clk];
 set_property -dict { PACKAGE_PIN B17 IOSTANDARD LVCMOS33 PULLUP true } [get_ports ps2Data];
 
+<<<<<<< HEAD
 set_property -dict { PACKAGE_PIN T18 IOSTANDARD LVCMOS33 } [get_ports rst];    # btnU
+=======
+set_property -dict { PACKAGE_PIN T18 IOSTANDARD LVCMOS33 } [get_ports rst_prueba];    # btnU
+>>>>>>> e200ab97889912150594ad3acffbabffaadafa9c
 set_property -dict { PACKAGE_PIN U18 IOSTANDARD LVCMOS33 } [get_ports btnC];    # btnC
 set_property -dict { PACKAGE_PIN W19 IOSTANDARD LVCMOS33 } [get_ports btnL];    # btnL
 set_property -dict { PACKAGE_PIN T17 IOSTANDARD LVCMOS33 } [get_ports btnR];    # btnR
