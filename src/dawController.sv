@@ -124,7 +124,7 @@ always_ff @(posedge clk) begin
             ui_active_pattern    <= '0;
             ui_active_instrument <= PIANO;
             bpm_out              <= 8'd120;
-            is_playing           <= 1'b1;
+            is_playing           <= 1'b0;
             step_forward_pulse   <= '0;
             step_backward_pulse   <= '0;
             clear_pattern_pulse  <= 1'b0;

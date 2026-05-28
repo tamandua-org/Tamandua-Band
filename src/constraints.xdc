@@ -26,6 +26,9 @@ set_property -dict { PACKAGE_PIN L2 IOSTANDARD LVCMOS33 } [get_ports lrclk]; # s
 set_property -dict { PACKAGE_PIN J2 IOSTANDARD LVCMOS33 } [get_ports sclk]; # left (low)/right (high) clock stereo
 set_property -dict { PACKAGE_PIN G2 IOSTANDARD LVCMOS33 } [get_ports sdata]; # serial data
 
+set_property -dict { PACKAGE_PIN C17 IOSTANDARD LVCMOS33 PULLUP true } [get_ports ps2Clk];
+set_property -dict { PACKAGE_PIN B17 IOSTANDARD LVCMOS33 PULLUP true } [get_ports ps2Data];
+
 set_property -dict { PACKAGE_PIN T18 IOSTANDARD LVCMOS33 } [get_ports rst_prueba];    # btnU
 set_property -dict { PACKAGE_PIN U18 IOSTANDARD LVCMOS33 } [get_ports btnC];    # btnC
 set_property -dict { PACKAGE_PIN W19 IOSTANDARD LVCMOS33 } [get_ports btnL];    # btnL
