@@ -203,6 +203,7 @@ module patternRamWrapper (
             bram_b_din   <= '0;
         end else begin
             bram_b_we <= 1'b0;
+            do_overflow_clear  <= 1'b0;
 
             case (state)
                 IDLE: begin
