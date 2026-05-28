@@ -12,7 +12,7 @@ module patternRamWrapper (
 
     // Port A.2 - UI Visualizer (Lower Priority)
     input  logic       ui_req,  
-    input  logic [9:0] ui_addr,     
+    input  logic [9:0] ui_addr,     //addr = {pattern_bits, step num}
     output pattern_col_t ui_rdata,
     output logic       ui_valid, 
 

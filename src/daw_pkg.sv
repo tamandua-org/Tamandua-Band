@@ -5,6 +5,7 @@ package daw_pkg;
     localparam PATTERN_LENGTH = 64; // 4 semiquavers * 4 beats * 4 bars
     localparam NUM_PATTERNS = 10;
     localparam BPM_BITS = 8;  // 1 - 255 BPM 
+    localparam NUM_VOICES = 66; // 10 patterns x 6 notes + 6 notes live play
 
     // Bit Widths
     localparam PATTERN_ID_BITS = 4;  // 4 bits addresses up to 16 patterns
