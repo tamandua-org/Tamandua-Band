@@ -14,6 +14,7 @@ module dawController (
     output logic [PATTERN_ID_BITS-1:0] ui_active_pattern,
     output instrument_t              ui_active_instrument,
     output note_delta_t               ui_active_note_slot,
+    output logic [3:0]               current_octave,
     output logic [7:0]               bpm_out,
     output logic                     is_playing,        // 1 = Sequencer running, 0 = Paused
     output logic step_forward_pulse,
@@ -112,7 +113,6 @@ module dawController (
     assign mode_live   = (current_mode == MODE_LIVE);
     assign mode_record = (current_mode == MODE_RECORD);
 
-    logic [3:0] current_octave;
     //note_delta_t ui_active_note_slot;
     logic [4:0] countdown_timer;
     logic       countdown_active;
@@ -124,7 +124,7 @@ always_ff @(posedge clk) begin
             ui_active_pattern    <= '0;
             ui_active_instrument <= PIANO;
             bpm_out              <= 8'd120;
-            is_playing           <= 1'b0;
+            is_playing           <= 1'b1;
             step_forward_pulse   <= '0;
             step_backward_pulse   <= '0;
             clear_pattern_pulse  <= 1'b0;
