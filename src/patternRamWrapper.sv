@@ -221,7 +221,7 @@ module patternRamWrapper (
                 end
 
                 READ_COL: begin
-                    bram_b_addr <= (snap_pattern * PATTERN_LENGTH) + snap_step;
+                    bram_b_addr <= {snap_pattern, snap_step};
                    
                     // Signal the held block to clear overflowed entries
                     do_overflow_clear  <= 1'b1;
@@ -235,7 +235,7 @@ module patternRamWrapper (
  
                 MODIFY_COL: begin
                     if (note_idx == MAX_NOTES) begin
-                        bram_b_addr <= (snap_pattern * PATTERN_LENGTH) + snap_step;
+                        bram_b_addr <= {snap_pattern, snap_step};
                         bram_b_din  <= ram_step; //pattern_col_t must have same size
                         bram_b_we   <= 1'b1;
                         state       <= IDLE;
@@ -260,7 +260,7 @@ module patternRamWrapper (
                 end
  
                 CLEAR_LOOP: begin
-                    bram_b_addr <= (snap_pattern * PATTERN_LENGTH) + clear_col; //cambiar por dsp
+                    bram_b_addr <= {snap_pattern, clear_col}; 
                     bram_b_din  <= '0;
                     bram_b_we   <= 1'b1;
 

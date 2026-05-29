@@ -124,13 +124,13 @@ module patternEngine (
 
                 REQ_CURR: begin
                     ram_req  <= 1'b1;
-                    ram_addr <= (scan_pattern * PATTERN_LENGTH) + current_playback_step;
+                    ram_addr <= {scan_pattern, current_playback_step};
                     state    <= REQ_PREV;
                 end
 
                 REQ_PREV: begin
                     ram_req  <= 1'b1; // Back-to-back request
-                    ram_addr <= (scan_pattern * PATTERN_LENGTH) + target_prev_step;
+                    ram_addr <= {scan_pattern, target_prev_step};
                     state    <= WAIT_CURR_DATA;
                 end
 

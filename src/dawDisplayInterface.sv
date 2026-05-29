@@ -50,14 +50,14 @@ module dawDisplayInterface #(
 
     cache_state_t                 cache_state;
     logic [5:0]                   fetch_col;
-    logic [PATTERN_ID_BITS-1:0]   fetch_pattern;
+    logic [PATTERN_ID_BITS-1:0]   cached_pattern_id;
     logic                         cache_valid;
 
     always_ff @(posedge clk) begin
         if (rst) begin
             cache_state   <= CACHE_IDLE;
             fetch_col     <= '0;
-            fetch_pattern <= '0;
+            cached_pattern_id <= '0;
             cache_valid   <= 1'b0;
             ui_req        <= 1'b0;
             ui_addr       <= '0;
@@ -68,23 +68,22 @@ module dawDisplayInterface #(
             ui_req <= 1'b0;
 
             // If the selected pattern changes, restart the cache fill.
-            if (ui_active_pattern != fetch_pattern) begin
-                fetch_pattern <= ui_active_pattern;
+            if (ui_active_pattern != cached_pattern_id) begin
+                cached_pattern_id <= ui_active_pattern;
                 fetch_col     <= '0;
                 cache_valid   <= 1'b0;
                 cache_state   <= CACHE_REQ;
             end else begin
                 case (cache_state)
                     CACHE_IDLE: begin
-                        // Continuous low-priority refresh. 64 reads is cheap and keeps
-                        // the screen synchronized after edits/clear/recording.
+                        // it's okay to always refresh it's lower priority than patternEngine requests
                         fetch_col   <= '0;
                         cache_state <= CACHE_REQ;
                     end
 
                     CACHE_REQ: begin
                         ui_req      <= 1'b1;
-                        ui_addr     <= (fetch_pattern * PATTERN_LENGTH) + fetch_col;
+                        ui_addr     <= {cached_pattern_id, fetch_col};
                         cache_state <= CACHE_WAIT;
                     end
 
@@ -108,12 +107,11 @@ module dawDisplayInterface #(
         end
     end
 
-    // --------------------------------------------------------------------
     // VGA timing
-    // --------------------------------------------------------------------
     pixelColor_t color;
     logic [9:0] pixel;
     logic [9:0] line;
+    logic [11:0] rgb_next;
     logic [11:0] rgb_reg;
 
     vgaRefresher refresher (
@@ -127,9 +125,9 @@ module dawDisplayInterface #(
         .pixelColorOut (RGB)
     );
 
-    assign color.red   = rgb_reg[11:8];
-    assign color.green = rgb_reg[7:4];
-    assign color.blue  = rgb_reg[3:0];
+    assign color.red   = rgb_next[11:8];
+    assign color.green = rgb_next[7:4];
+    assign color.blue  = rgb_next[3:0];
 
     // --------------------------------------------------------------------
     // Small 5x7 font. Only one scale is used: 2x, so a char is 10x14 px.
@@ -490,7 +488,6 @@ module dawDisplayInterface #(
         end
     end
     
-    logic [11:0] rgb_next;
     // Combinational renderer
     always_comb begin
         int local_x;
@@ -687,11 +684,11 @@ module dawDisplayInterface #(
             rgb_next = 12'hEEE;
     end
     
-    always_ff @(posedge clk) begin
-        if (rst)
-            rgb_reg <= '0;
-        else 
-            rgb_reg <= rgb_next;
-    end
+//    always_ff @(posedge clk) begin
+//        if (rst)
+//            rgb_reg <= '0;
+//        else 
+//            rgb_reg <= rgb_next;
+//    end
 
 endmodule

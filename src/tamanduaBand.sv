@@ -132,7 +132,7 @@ module tamanduaBand (
     instrument_t active_pattern_instrument;
     assign active_pattern_instrument = instrument_regs[ui_active_pattern];
 
-    patternRamWrapper memory_wrapper (
+    patternRamWrapper ramWrapper (
         .clk(clk),
         .rst(rstSync),
         
