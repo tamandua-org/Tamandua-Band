@@ -43,6 +43,7 @@ module tamanduaBand (
     logic [PATTERN_ID_BITS-1:0] ui_active_pattern;
     instrument_t                ui_active_instrument;
     note_delta_t                ui_active_note_slot;
+    logic [3:0]                 current_octave;
     logic                       is_playing;
     logic step_forward_pulse;
     logic step_backward_pulse;
@@ -63,6 +64,7 @@ module tamanduaBand (
         .ui_active_pattern(ui_active_pattern),
         .ui_active_instrument(ui_active_instrument),
         .ui_active_note_slot(ui_active_note_slot),
+        .current_octave(current_octave),
         .bpm_out,
         .is_playing(is_playing),
         .step_forward_pulse(step_forward_pulse),
@@ -122,10 +124,13 @@ module tamanduaBand (
         .note_off_valid(note_off_valid)
     );
     
-    logic         ui_req   = 1'b0;
-    logic [9:0]   ui_addr  = '0;
+    logic         ui_req;
+    logic [9:0]   ui_addr;
     pattern_col_t ui_rdata;
     logic         ui_valid;
+
+    instrument_t active_pattern_instrument;
+    assign active_pattern_instrument = instrument_regs[ui_active_pattern];
 
     patternRamWrapper memory_wrapper (
         .clk(clk),
@@ -152,6 +157,32 @@ module tamanduaBand (
         .live_pitch(live_pitch),
         .clear_pattern_pulse(clear_pattern_pulse),
         .ui_active_pattern(ui_active_pattern)
+    );
+
+    dawDisplayInterface display (
+        .clk                    (clk),
+        .rst                    (rstSync),
+
+        .bpm                    (bpm_out),
+        .mute_mask              (mute_mask),
+        .ui_active_pattern      (ui_active_pattern),
+        .ui_active_instrument   (active_pattern_instrument),
+        .ui_active_note_slot    (ui_active_note_slot),
+        .current_octave         (current_octave),
+        .is_playing             (is_playing),
+        .mode_normal            (mode_normal),
+        .mode_live              (mode_live),
+        .mode_record            (mode_record),
+        .current_playback_step  (current_playback_step),
+
+        .ui_req                 (ui_req),
+        .ui_addr                (ui_addr),
+        .ui_rdata               (ui_rdata),
+        .ui_valid               (ui_valid),
+
+        .hSync                  (hSync),
+        .vSync                  (vSync),
+        .RGB                    (RGB)
     );
     
     i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(), .sample(), .mclk, .sclk, .lrclk, .sdata);

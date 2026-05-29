@@ -29,7 +29,7 @@ module i2s_transmitter (
     end
 
     logic sclkFall;
-    edgeDetector #(.XPOL(0)) sclkEdgeDetector (.clk(mclk), .x(sclk), .xFall(sclkFall));
+    edgeDetector #(.XPOL(0)) sclkEdgeDetector (.clk(mclk), .x(sclk), .xFall(sclkFall), .xRise());
 
     // ----------------------------------------------------------------
     //  Pending sample - solo escrito desde clk100mhz

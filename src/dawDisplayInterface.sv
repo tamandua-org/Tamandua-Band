@@ -1,10 +1,6 @@
 import daw_pkg::*;
 import pixelColor_pkg::*;
 
-// VGA display for the Tamandua DAW / looper.
-// - Uses the existing patternRamWrapper UI read port.
-// - Caches the selected pattern locally, then renders a piano-roll grid.
-// - 640x480 VGA, driven through the existing vgaRefresher module.
 module dawDisplayInterface #(
     parameter int GRID_X = 64,
     parameter int GRID_Y = 106,
@@ -21,6 +17,7 @@ module dawDisplayInterface #(
     input  logic [PATTERN_ID_BITS-1:0]  ui_active_pattern,
     input  instrument_t                 ui_active_instrument,
     input  note_delta_t                 ui_active_note_slot,
+    input  logic [3:0]                  current_octave,
     input  logic                        is_playing,
     input  logic                        mode_normal,
     input  logic                        mode_live,
@@ -42,9 +39,7 @@ module dawDisplayInterface #(
     localparam int GRID_W = PATTERN_LENGTH * STEP_W;      // 512
     localparam int GRID_H = VISIBLE_NOTES * NOTE_H;       // 256
 
-    // --------------------------------------------------------------------
-    // Cache the active pattern for pixel rendering
-    // --------------------------------------------------------------------
+    // We cache the active pattern for rendering
     pattern_col_t pattern_cache [PATTERN_LENGTH];
 
     typedef enum logic [1:0] {
@@ -119,7 +114,7 @@ module dawDisplayInterface #(
     pixelColor_t color;
     logic [9:0] pixel;
     logic [9:0] line;
-    logic [11:0] rgb_next;
+    logic [11:0] rgb_reg;
 
     vgaRefresher refresher (
         .clk100mhz     (clk),
@@ -132,9 +127,9 @@ module dawDisplayInterface #(
         .pixelColorOut (RGB)
     );
 
-    assign color.red   = rgb_next[11:8];
-    assign color.green = rgb_next[7:4];
-    assign color.blue  = rgb_next[3:0];
+    assign color.red   = rgb_reg[11:8];
+    assign color.green = rgb_reg[7:4];
+    assign color.blue  = rgb_reg[3:0];
 
     // --------------------------------------------------------------------
     // Small 5x7 font. Only one scale is used: 2x, so a char is 10x14 px.
@@ -357,6 +352,36 @@ module dawDisplayInterface #(
         end
     endfunction
 
+    function automatic logic octave_is_negative(input note_delta_t midi_note);
+        begin
+            // Standard MIDI octave numbering: MIDI 60 = C4.
+            // Therefore octave = floor(midi_note / 12) - 1.
+            octave_is_negative = (midi_note < 7'd12);
+        end
+    endfunction
+
+    function automatic logic [3:0] octave_abs_digit(input note_delta_t midi_note);
+        begin
+            // Absolute value of the octave digit for MIDI notes 0..127.
+            // 0..11  -> octave -1
+            // 12..23 -> octave  0
+            // 24..35 -> octave  1
+            // ...
+            // 120..127 -> octave 9
+            if      (midi_note < 7'd12)  octave_abs_digit = 4'd1;
+            else if (midi_note < 7'd24)  octave_abs_digit = 4'd0;
+            else if (midi_note < 7'd36)  octave_abs_digit = 4'd1;
+            else if (midi_note < 7'd48)  octave_abs_digit = 4'd2;
+            else if (midi_note < 7'd60)  octave_abs_digit = 4'd3;
+            else if (midi_note < 7'd72)  octave_abs_digit = 4'd4;
+            else if (midi_note < 7'd84)  octave_abs_digit = 4'd5;
+            else if (midi_note < 7'd96)  octave_abs_digit = 4'd6;
+            else if (midi_note < 7'd108) octave_abs_digit = 4'd7;
+            else if (midi_note < 7'd120) octave_abs_digit = 4'd8;
+            else                         octave_abs_digit = 4'd9;
+        end
+    endfunction
+
     function automatic logic [7:0] mode_char(input logic normal, input logic live, input logic record, input int idx);
         begin
             mode_char = 8'h20;
@@ -443,19 +468,30 @@ module dawDisplayInterface #(
         end
     endfunction
 
-    // --------------------------------------------------------------------
-    // Combinational renderer
-    // --------------------------------------------------------------------
+
     logic [3:0] bpm_hundreds;
     logic [3:0] bpm_tens;
     logic [3:0] bpm_ones;
+    
+    logic [7:0] bpm_prev;
 
-    always_comb begin
-        bpm_hundreds = bpm / 8'd100;
-        bpm_tens     = (bpm % 8'd100) / 8'd10;
-        bpm_ones     = bpm % 8'd10;
+    always_ff @(posedge clk) begin
+        if (rst) begin //we know we are using 120 as default, so might as well maintain it here too
+            bpm_hundreds <= 4'd1;
+            bpm_tens     <= 4'd2;
+            bpm_ones     <= 4'd0;
+            bpm_prev     <= 8'd120;
+        end else if (bpm != bpm_prev) begin
+            bpm_prev     <= bpm;
+    
+            bpm_hundreds <= bpm / 8'd100;
+            bpm_tens     <= (bpm % 8'd100) / 8'd10;
+            bpm_ones     <= bpm % 8'd10;
+        end
     end
-
+    
+    logic [11:0] rgb_next;
+    // Combinational renderer
     always_comb begin
         int local_x;
         int local_y;
@@ -489,6 +525,23 @@ module dawDisplayInterface #(
         // Main outer panel
         if (border_rect(pixel, line, 24, 18, 592, 424, 2))
             rgb_next = 12'h333;
+
+        // Top-left octave label: OCT:4.
+        // This uses the octave selected in dawController with comma/dot,
+        // not the octave derived from ui_active_note_slot.
+        for (int i = 0; i < 5; i++) begin
+            unique case (i)
+                0: ch = 8'h4F; // O
+                1: ch = 8'h43; // C
+                2: ch = 8'h54; // T
+                3: ch = 8'h3A; // :
+                4: ch = digit_ascii(current_octave);
+                default: ch = 8'h20;
+            endcase
+
+            if (char_pixel(pixel, line, 38 + i*12, 32, ch))
+                text_hit = 1'b1;
+        end
 
         // Top pattern buttons: 1 2 3 4 5 6 7 8 9 0
         for (int i = 0; i < NUM_PATTERNS; i++) begin
@@ -632,6 +685,13 @@ module dawDisplayInterface #(
 
         if (text_hit)
             rgb_next = 12'hEEE;
+    end
+    
+    always_ff @(posedge clk) begin
+        if (rst)
+            rgb_reg <= '0;
+        else 
+            rgb_reg <= rgb_next;
     end
 
 endmodule
