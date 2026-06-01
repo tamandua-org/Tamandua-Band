@@ -42,6 +42,11 @@ module dawDisplayInterface #(
     // We cache the active pattern for rendering
     pattern_col_t pattern_cache [PATTERN_LENGTH];
 
+    // Pre-rendered piano-roll bitmap for the current 32-note window.
+    // note_bitmap[col][row] = 1 means draw a note block at that grid cell.
+    // This removes the MAX_NOTES loop and the pattern_cache read from the per-pixel path.
+    logic [VISIBLE_NOTES-1:0] note_bitmap [PATTERN_LENGTH];
+
     typedef enum logic [1:0] {
         CACHE_IDLE,
         CACHE_REQ,
@@ -51,28 +56,75 @@ module dawDisplayInterface #(
     cache_state_t                 cache_state;
     logic [5:0]                   fetch_col;
     logic [PATTERN_ID_BITS-1:0]   cached_pattern_id;
+    note_delta_t                  cached_note_slot;
     logic                         cache_valid;
+
+    logic [6:0]                   visible_min_reg;
+    logic [6:0]                   visible_max_reg;
+    logic [4:0]                   selected_grid_row;
+
+    function automatic logic [6:0] compute_visible_min(input note_delta_t midi_note);
+        begin
+            if (midi_note < 7'd16)
+                compute_visible_min = 7'd0;
+            else if (midi_note > 7'd111)
+                compute_visible_min = 7'd96;
+            else
+                compute_visible_min = midi_note - 7'd16;
+        end
+    endfunction
+
+    function automatic logic [VISIBLE_NOTES-1:0] make_col_bitmap(
+        input pattern_col_t col,
+        input logic [6:0] vmin,
+        input logic [6:0] vmax
+    );
+        logic [VISIBLE_NOTES-1:0] bits;
+        logic [6:0] pitch;
+        logic [6:0] row7;
+        begin
+            bits = '0;
+            for (int n = 0; n < MAX_NOTES; n++) begin
+                pitch = col.notes[n].note_delta;
+                if (col.notes[n].active && pitch >= vmin && pitch <= vmax) begin
+                    row7 = vmax - pitch;
+                    bits[row7[4:0]] = 1'b1;
+                end
+            end
+            make_col_bitmap = bits;
+        end
+    endfunction
 
     always_ff @(posedge clk) begin
         if (rst) begin
             cache_state   <= CACHE_IDLE;
             fetch_col     <= '0;
             cached_pattern_id <= '0;
-            cache_valid   <= 1'b0;
-            ui_req        <= 1'b0;
-            ui_addr       <= '0;
+            cached_note_slot  <= '0;
+            cache_valid       <= 1'b0;
+            visible_min_reg   <= 7'd44;   // default for note 60 -> 44..75
+            visible_max_reg   <= 7'd75;
+            selected_grid_row <= 5'd15;
+            ui_req            <= 1'b0;
+            ui_addr           <= '0;
             for (int i = 0; i < PATTERN_LENGTH; i++) begin
                 pattern_cache[i] <= '0;
+                note_bitmap[i]   <= '0;
             end
         end else begin
             ui_req <= 1'b0;
 
-            // If the selected pattern changes, restart the cache fill.
-            if (ui_active_pattern != cached_pattern_id) begin
+            // If the selected pattern or the 32-note window changes, restart the cache fill.
+            // The cache fill also builds note_bitmap so the pixel renderer only does one bitmap lookup.
+            if ((ui_active_pattern != cached_pattern_id) || (ui_active_note_slot != cached_note_slot)) begin
                 cached_pattern_id <= ui_active_pattern;
-                fetch_col     <= '0;
-                cache_valid   <= 1'b0;
-                cache_state   <= CACHE_REQ;
+                cached_note_slot  <= ui_active_note_slot;
+                visible_min_reg   <= compute_visible_min(ui_active_note_slot);
+                visible_max_reg   <= compute_visible_min(ui_active_note_slot) + 7'd31;
+                selected_grid_row <= (compute_visible_min(ui_active_note_slot) + 7'd31) - ui_active_note_slot;
+                fetch_col         <= '0;
+                cache_valid       <= 1'b0;
+                cache_state       <= CACHE_REQ;
             end else begin
                 case (cache_state)
                     CACHE_IDLE: begin
@@ -90,6 +142,7 @@ module dawDisplayInterface #(
                     CACHE_WAIT: begin
                         if (ui_valid) begin
                             pattern_cache[fetch_col] <= ui_rdata;
+                            note_bitmap[fetch_col]   <= make_col_bitmap(ui_rdata, visible_min_reg, visible_max_reg);
 
                             if (fetch_col == PATTERN_LENGTH - 1) begin
                                 cache_valid <= 1'b1;
@@ -107,116 +160,27 @@ module dawDisplayInterface #(
         end
     end
 
-    // --------------------------------------------------------------------
-    // VGA timing + renderer pipeline
-    //
-    // The old version drove the VGA refresher with one big combinational
-    // pixel renderer. This version keeps the same 640x480 timing but
-    // registers the pixel coordinates, rendered color, sync and blanking.
-    //
-    // Pipeline at clk25mhz:
-    //   counter pixel -> render_x/render_y -> rgb_s1 -> RGB
-    //
-    // hSync/vSync/blanking are delayed through the same pipeline, so the
-    // delayed RGB remains aligned with the delayed VGA timing.
-    // --------------------------------------------------------------------
-    logic        clk25mhz;
+    // VGA timing
+    pixelColor_t color;
+    logic [9:0] pixel;
+    logic [9:0] line;
+    logic [11:0] rgb_next;
+    logic [11:0] rgb_reg;
 
-    logic [9:0]  h_cnt;
-    logic [9:0]  v_cnt;
-
-    logic [9:0]  render_x;
-    logic [9:0]  render_y;
-
-    logic        hsync_s0;
-    logic        vsync_s0;
-    logic        blank_s0;
-
-    logic        hsync_s1;
-    logic        vsync_s1;
-    logic        blank_s1;
-
-    logic [11:0] rgb_comb;
-    logic [11:0] rgb_s1;
-
-    vgaClock clkgen (
-        .clk_out1(clk25mhz),
-        .reset   (rst),
-        .clk_in1 (clk)
+    vgaRefresher refresher (
+        .clk100mhz     (clk),
+        .rst           (rst),
+        .pixelColorIn  (color),
+        .hSync         (hSync),
+        .vSync         (vSync),
+        .pixel         (pixel),
+        .line          (line),
+        .pixelColorOut (RGB)
     );
 
-    function automatic logic hsync_for(input logic [9:0] x);
-        begin
-            hsync_for = !((x >= 10'd656) && (x < 10'd752));
-        end
-    endfunction
-
-    function automatic logic vsync_for(input logic [9:0] y);
-        begin
-            vsync_for = !((y >= 10'd490) && (y < 10'd492));
-        end
-    endfunction
-
-    function automatic logic blank_for(input logic [9:0] x, input logic [9:0] y);
-        begin
-            blank_for = (x >= 10'd640) || (y >= 10'd480);
-        end
-    endfunction
-
-    always_ff @(posedge clk25mhz) begin
-        if (rst) begin
-            h_cnt    <= 10'd0;
-            v_cnt    <= 10'd0;
-
-            render_x <= 10'd0;
-            render_y <= 10'd0;
-
-            hsync_s0 <= 1'b1;
-            vsync_s0 <= 1'b1;
-            blank_s0 <= 1'b1;
-
-            hsync_s1 <= 1'b1;
-            vsync_s1 <= 1'b1;
-            blank_s1 <= 1'b1;
-
-            rgb_s1   <= 12'h000;
-
-            hSync    <= 1'b1;
-            vSync    <= 1'b1;
-            RGB      <= 12'h000;
-        end else begin
-            // Stage 0: capture the pixel currently being scanned.
-            render_x <= h_cnt;
-            render_y <= v_cnt;
-
-            hsync_s0 <= hsync_for(h_cnt);
-            vsync_s0 <= vsync_for(v_cnt);
-            blank_s0 <= blank_for(h_cnt, v_cnt);
-
-            // Stage 1: capture rendered color for the previously captured pixel.
-            rgb_s1   <= rgb_comb;
-            hsync_s1 <= hsync_s0;
-            vsync_s1 <= vsync_s0;
-            blank_s1 <= blank_s0;
-
-            // Output stage: RGB and sync are delayed by the same amount.
-            hSync    <= hsync_s1;
-            vSync    <= vsync_s1;
-            RGB      <= blank_s1 ? 12'h000 : rgb_s1;
-
-            // VGA counters: 800 x 525 total timing.
-            if (h_cnt == 10'd799) begin
-                h_cnt <= 10'd0;
-
-                if (v_cnt == 10'd524)
-                    v_cnt <= 10'd0;
-                else
-                    v_cnt <= v_cnt + 10'd1;
-            end else begin
-                h_cnt <= h_cnt + 10'd1;
-            end
-        end
-    end
+    assign color.red   = rgb_next[11:8];
+    assign color.green = rgb_next[7:4];
+    assign color.blue  = rgb_next[3:0];
 
     // --------------------------------------------------------------------
     // Small 5x7 font. Only one scale is used: 2x, so a char is 10x14 px.
@@ -562,244 +526,316 @@ module dawDisplayInterface #(
     
     logic [7:0] bpm_prev;
 
+    logic [3:0] note_hundreds;
+    logic [3:0] note_tens;
+    logic [3:0] note_ones;
+    note_delta_t note_prev;
+
     always_ff @(posedge clk) begin
         if (rst) begin //we know we are using 120 as default, so might as well maintain it here too
             bpm_hundreds <= 4'd1;
             bpm_tens     <= 4'd2;
             bpm_ones     <= 4'd0;
             bpm_prev     <= 8'd120;
-        end else if (bpm != bpm_prev) begin
-            bpm_prev     <= bpm;
-    
-            bpm_hundreds <= bpm / 8'd100;
-            bpm_tens     <= (bpm % 8'd100) / 8'd10;
-            bpm_ones     <= bpm % 8'd10;
-        end
-    end
-
-
-    // Precompute note display digits and the 32-note visible window outside
-    // of the per-pixel renderer. This removes divisions and note-window
-    // comparisons from the VGA pixel path.
-    logic [3:0] note_hundreds;
-    logic [3:0] note_tens;
-    logic [3:0] note_ones;
-    logic [6:0] visible_min_reg;
-    logic [6:0] visible_max_reg;
-    logic [5:0] selected_note_row_reg;
-
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            // Default selected note is usually MIDI 60.
-            note_hundreds         <= 4'd0;
-            note_tens             <= 4'd6;
-            note_ones             <= 4'd0;
-            visible_min_reg       <= 7'd44;
-            visible_max_reg       <= 7'd75;
-            selected_note_row_reg <= 6'd15;
+            note_hundreds <= 4'd0;
+            note_tens     <= 4'd6;
+            note_ones     <= 4'd0;
+            note_prev     <= 7'd60;
         end else begin
-            note_hundreds <= ui_active_note_slot / 7'd100;
-            note_tens     <= (ui_active_note_slot % 7'd100) / 7'd10;
-            note_ones     <= ui_active_note_slot % 7'd10;
+            if (bpm != bpm_prev) begin
+                bpm_prev     <= bpm;
+                bpm_hundreds <= bpm / 8'd100;
+                bpm_tens     <= (bpm % 8'd100) / 8'd10;
+                bpm_ones     <= bpm % 8'd10;
+            end
 
-            if (ui_active_note_slot < 7'd16) begin
-                visible_min_reg       <= 7'd0;
-                visible_max_reg       <= 7'd31;
-                selected_note_row_reg <= 7'd31 - ui_active_note_slot;
-            end else if (ui_active_note_slot > 7'd111) begin
-                visible_min_reg       <= 7'd96;
-                visible_max_reg       <= 7'd127;
-                selected_note_row_reg <= 7'd127 - ui_active_note_slot;
-            end else begin
-                visible_min_reg       <= ui_active_note_slot - 7'd16;
-                visible_max_reg       <= ui_active_note_slot + 7'd15;
-                selected_note_row_reg <= 6'd15;
+            if (ui_active_note_slot != note_prev) begin
+                note_prev     <= ui_active_note_slot;
+                note_hundreds <= ui_active_note_slot / 7'd100;
+                note_tens     <= (ui_active_note_slot % 7'd100) / 7'd10;
+                note_ones     <= ui_active_note_slot % 7'd10;
             end
         end
     end
+    
+
+    function automatic int char_idx_12(input int rel_x);
+        begin
+            char_idx_12 = 0;
+            for (int k = 1; k < 16; k++) begin
+                if (rel_x >= k*12)
+                    char_idx_12 = k;
+            end
+        end
+    endfunction
+
+    function automatic logic [7:0] octave_label_char(input int idx, input logic [3:0] oct);
+        begin
+            unique case (idx)
+                0: octave_label_char = 8'h4F; // O
+                1: octave_label_char = 8'h43; // C
+                2: octave_label_char = 8'h54; // T
+                3: octave_label_char = 8'h3A; // :
+                4: octave_label_char = digit_ascii(oct);
+                default: octave_label_char = 8'h20;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [7:0] bpm_label_char(
+        input int idx,
+        input logic [3:0] hundreds,
+        input logic [3:0] tens,
+        input logic [3:0] ones
+    );
+        begin
+            unique case (idx)
+                0: bpm_label_char = 8'h42; // B
+                1: bpm_label_char = 8'h50; // P
+                2: bpm_label_char = 8'h4D; // M
+                3: bpm_label_char = 8'h3A; // :
+                4: bpm_label_char = digit_ascii(hundreds);
+                5: bpm_label_char = digit_ascii(tens);
+                6: bpm_label_char = digit_ascii(ones);
+                default: bpm_label_char = 8'h20;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [7:0] note_label_char(
+        input int idx,
+        input logic [3:0] hundreds,
+        input logic [3:0] tens,
+        input logic [3:0] ones
+    );
+        begin
+            unique case (idx)
+                0: note_label_char = 8'h4E; // N
+                1: note_label_char = 8'h4F; // O
+                2: note_label_char = 8'h54; // T
+                3: note_label_char = 8'h45; // E
+                4: note_label_char = 8'h3A; // :
+                5: note_label_char = digit_ascii(hundreds);
+                6: note_label_char = digit_ascii(tens);
+                7: note_label_char = digit_ascii(ones);
+                default: note_label_char = 8'h20;
+            endcase
+        end
+    endfunction
+
+    function automatic logic [7:0] mode_label_char(
+        input int idx,
+        input logic normal,
+        input logic live,
+        input logic record
+    );
+        begin
+            unique case (idx)
+                0: mode_label_char = 8'h4D; // M
+                1: mode_label_char = 8'h4F; // O
+                2: mode_label_char = 8'h44; // D
+                3: mode_label_char = 8'h45; // E
+                4: mode_label_char = 8'h3A; // :
+                5: mode_label_char = 8'h20;
+                default: mode_label_char = mode_char(normal, live, record, idx - 6);
+            endcase
+        end
+    endfunction
+
+    function automatic logic [7:0] instr_label_char(input int idx, input instrument_t inst);
+        begin
+            unique case (idx)
+                0: instr_label_char = 8'h49; // I
+                1: instr_label_char = 8'h4E; // N
+                2: instr_label_char = 8'h53; // S
+                3: instr_label_char = 8'h54; // T
+                4: instr_label_char = 8'h52; // R
+                5: instr_label_char = 8'h3A; // :
+                6: instr_label_char = 8'h20;
+                default: instr_label_char = instrument_char(inst, idx - 7);
+            endcase
+        end
+    endfunction
 
     // Combinational renderer
+    // Timing-oriented version:
+    //   * still uses vgaRefresher for the VGA counters and output registers
+    //   * uses note_bitmap instead of scanning MAX_NOTES for every pixel
+    //   * tests only one text character per pixel instead of every character string
     always_comb begin
         int local_x;
         int local_y;
         int grid_col;
         int grid_row;
         int bx;
-        int note_row;
-        int text_idx;
-        int text_x;
-        int text_y;
+        int btn_idx;
+        int btn_local_x;
+        int rel_x;
+        int char_idx;
+        int char_x0;
+        int char_y0;
         logic in_grid;
-        logic note_hit;
         logic text_hit;
-        logic [6:0] pitch;
+        logic text_candidate;
         logic [7:0] ch;
 
-        rgb_comb = 12'h000;
-        text_hit = 1'b0;
+        rgb_next       = 12'h000;
+        text_hit       = 1'b0;
+        text_candidate = 1'b0;
+        ch             = 8'h20;
+        char_x0        = 0;
+        char_y0        = 0;
 
         // Main outer panel
-        if (border_rect(render_x, render_y, 24, 18, 592, 424, 2))
-            rgb_comb = 12'h333;
-
-        // Top-left octave label: OCT:4.
-        // This uses the octave selected in dawController with comma/dot,
-        // not the octave derived from ui_active_note_slot.
-        for (int i = 0; i < 5; i++) begin
-            unique case (i)
-                0: ch = 8'h4F; // O
-                1: ch = 8'h43; // C
-                2: ch = 8'h54; // T
-                3: ch = 8'h3A; // :
-                4: ch = digit_ascii(current_octave);
-                default: ch = 8'h20;
-            endcase
-
-            if (char_pixel(render_x, render_y, 38 + i*12, 32, ch))
-                text_hit = 1'b1;
-        end
-
-        // Top pattern buttons: 1 2 3 4 5 6 7 8 9 0
-        for (int i = 0; i < NUM_PATTERNS; i++) begin
-            bx = 160 + (i * 32);
-
-            if (in_rect(render_x, render_y, bx, 28, 26, 30)) begin
-                if (ui_active_pattern == i[PATTERN_ID_BITS-1:0])
-                    rgb_comb = 12'h073;
-                else if (mute_mask[i])
-                    rgb_comb = 12'h300;
-                else
-                    rgb_comb = 12'h111;
-            end
-
-            if (border_rect(render_x, render_y, bx, 28, 26, 30, 2)) begin
-                if (ui_active_pattern == i[PATTERN_ID_BITS-1:0])
-                    rgb_comb = 12'h0F6;
-                else if (mute_mask[i])
-                    rgb_comb = 12'hF33;
-                else
-                    rgb_comb = 12'h555;
-            end
-
-            ch = (i == 9) ? 8'h30 : digit_ascii(i[3:0] + 4'd1);
-            if (char_pixel(render_x, render_y, bx + 8, 36, ch))
-                text_hit = 1'b1;
-        end
-
-        // BPM label and value at top right
-        for (int i = 0; i < 7; i++) begin
-            unique case (i)
-                0: ch = 8'h42; // B
-                1: ch = 8'h50; // P
-                2: ch = 8'h4D; // M
-                3: ch = 8'h3A; // :
-                4: ch = digit_ascii(bpm_hundreds);
-                5: ch = digit_ascii(bpm_tens);
-                6: ch = digit_ascii(bpm_ones);
-                default: ch = 8'h20;
-            endcase
-            if (char_pixel(render_x, render_y, 514 + i*12, 32, ch))
-                text_hit = 1'b1;
-        end
+        if (border_rect(pixel, line, 24, 18, 592, 424, 2))
+            rgb_next = 12'h333;
 
         // Piano-roll / pattern grid
-        in_grid = in_rect(render_x, render_y, GRID_X, GRID_Y, GRID_W, GRID_H);
+        in_grid = in_rect(pixel, line, GRID_X, GRID_Y, GRID_W, GRID_H);
         if (in_grid) begin
-            local_x  = render_x - GRID_X;
-            local_y  = render_y - GRID_Y;
+            local_x  = pixel - GRID_X;
+            local_y  = line  - GRID_Y;
             grid_col = local_x >> 3; // / STEP_W
             grid_row = local_y >> 3; // / NOTE_H
 
             // background + selected pitch row
-            if (grid_row == selected_note_row_reg)
-                rgb_comb = 12'h112;
+            if (grid_row[4:0] == selected_grid_row)
+                rgb_next = 12'h112;
             else
-                rgb_comb = 12'h010;
+                rgb_next = 12'h010;
 
             // semiquaver/beat/bar grid lines
             if (local_x[2:0] == 3'd0 || local_y[2:0] == 3'd0)
-                rgb_comb = 12'h222;
+                rgb_next = 12'h222;
             if ((grid_col[1:0] == 2'd0) && (local_x[2:0] < 3'd2))
-                rgb_comb = 12'h333;
+                rgb_next = 12'h333;
             if ((grid_col[3:0] == 4'd0) && (local_x[2:0] < 3'd3))
-                rgb_comb = 12'h555;
+                rgb_next = 12'h555;
 
-            // note blocks
-            note_hit = 1'b0;
-            if (cache_valid) begin
-                for (int n = 0; n < MAX_NOTES; n++) begin
-                    if (pattern_cache[grid_col[5:0]].notes[n].active) begin
-                        pitch = pattern_cache[grid_col[5:0]].notes[n].note_delta;
-                        if (pitch >= visible_min_reg && pitch <= visible_max_reg) begin
-                            note_row = visible_max_reg - pitch;
-                            if (grid_row == note_row)
-                                note_hit = 1'b1;
-                        end
-                    end
-                end
-            end
-
-            if (note_hit)
-                rgb_comb = 12'h0C7;
+            // note blocks: one bitmap lookup, no note loop in the pixel path
+            if (cache_valid && note_bitmap[grid_col[5:0]][grid_row[4:0]])
+                rgb_next = 12'h0C7;
 
             // playback cursor
             if ((grid_col[5:0] == current_playback_step) && (local_x[2:0] < 3'd2))
-                rgb_comb = is_playing ? 12'hFF0 : 12'h777;
+                rgb_next = is_playing ? 12'hFF0 : 12'h777;
         end
 
         // Grid border
-        if (border_rect(render_x, render_y, GRID_X, GRID_Y, GRID_W, GRID_H, 2))
-            rgb_comb = 12'hAAA;
+        if (border_rect(pixel, line, GRID_X, GRID_Y, GRID_W, GRID_H, 2))
+            rgb_next = 12'hAAA;
 
-        // Bottom-left mode label: MODE: NORMAL/LIVE/RECORD/WAIT
-        for (int i = 0; i < 12; i++) begin
-            unique case (i)
-                0: ch = 8'h4D; // M
-                1: ch = 8'h4F; // O
-                2: ch = 8'h44; // D
-                3: ch = 8'h45; // E
-                4: ch = 8'h3A; // :
-                5: ch = 8'h20;
-                default: ch = mode_char(mode_normal, mode_live, mode_record, i - 6);
-            endcase
-            if (char_pixel(render_x, render_y, 38 + i*12, 408, ch))
-                text_hit = 1'b1;
+        // Top pattern buttons: 1 2 3 4 5 6 7 8 9 0
+        if ((pixel >= 10'd160) && (pixel < 10'd480) && (line >= 10'd28) && (line < 10'd58)) begin
+            local_x     = pixel - 10'd160;
+            btn_idx     = local_x >> 5;       // / 32
+            btn_local_x = local_x - (btn_idx << 5);
+            bx          = 160 + (btn_idx << 5);
+
+            if ((btn_idx >= 0) && (btn_idx < NUM_PATTERNS) && (btn_local_x < 26)) begin
+                if (ui_active_pattern == btn_idx[PATTERN_ID_BITS-1:0]) begin
+                    if (mute_mask[btn_idx])
+                        rgb_next = 12'hC80; // selected + muted: orange
+                    else
+                        rgb_next = 12'h073; // selected: green
+                end else if (mute_mask[btn_idx]) begin
+                    rgb_next = 12'h300;     // muted: red
+                end else begin
+                    rgb_next = 12'h111;     // normal: dark gray
+                end
+
+                if ((btn_local_x < 2) || (btn_local_x >= 24) || (line < 10'd30) || (line >= 10'd56)) begin
+                    if (ui_active_pattern == btn_idx[PATTERN_ID_BITS-1:0]) begin
+                        if (mute_mask[btn_idx])
+                            rgb_next = 12'hFA0;
+                        else
+                            rgb_next = 12'h0F6;
+                    end else if (mute_mask[btn_idx]) begin
+                        rgb_next = 12'hF33;
+                    end else begin
+                        rgb_next = 12'h555;
+                    end
+                end
+
+                ch = (btn_idx == 9) ? 8'h30 : digit_ascii(btn_idx[3:0] + 4'd1);
+                if (char_pixel(pixel, line, bx + 8, 36, ch))
+                    text_hit = 1'b1;
+            end
         end
 
-        // Bottom-center note window label: NOTE:xxx
-        for (int i = 0; i < 8; i++) begin
-            unique case (i)
-                0: ch = 8'h4E; // N
-                1: ch = 8'h4F; // O
-                2: ch = 8'h54; // T
-                3: ch = 8'h45; // E
-                4: ch = 8'h3A; // :
-                5: ch = digit_ascii(note_hundreds);
-                6: ch = digit_ascii(note_tens);
-                7: ch = digit_ascii(note_ones);
-                default: ch = 8'h20;
-            endcase
-            if (char_pixel(render_x, render_y, 264 + i*12, 408, ch))
-                text_hit = 1'b1;
+        // Text labels. Only one character is decoded per pixel.
+        if ((line >= 10'd32) && (line < 10'd46)) begin
+            // Top-left octave label: OCT:4
+            if ((pixel >= 10'd38) && (pixel < 10'd98)) begin
+                rel_x          = pixel - 10'd38;
+                char_idx       = char_idx_12(rel_x);
+                if (char_idx < 5) begin
+                    char_x0        = 38 + char_idx*12;
+                    char_y0        = 32;
+                    ch             = octave_label_char(char_idx, current_octave);
+                    text_candidate = 1'b1;
+                end
+            end
+            // BPM label and value at top right
+            else if ((pixel >= 10'd514) && (pixel < 10'd598)) begin
+                rel_x          = pixel - 10'd514;
+                char_idx       = char_idx_12(rel_x);
+                if (char_idx < 7) begin
+                    char_x0        = 514 + char_idx*12;
+                    char_y0        = 32;
+                    ch             = bpm_label_char(char_idx, bpm_hundreds, bpm_tens, bpm_ones);
+                    text_candidate = 1'b1;
+                end
+            end
+        end else if ((line >= 10'd408) && (line < 10'd422)) begin
+            // Bottom-left mode label: MODE: NORMAL/LIVE/RECORD/WAIT
+            if ((pixel >= 10'd38) && (pixel < 10'd182)) begin
+                rel_x          = pixel - 10'd38;
+                char_idx       = char_idx_12(rel_x);
+                if (char_idx < 12) begin
+                    char_x0        = 38 + char_idx*12;
+                    char_y0        = 408;
+                    ch             = mode_label_char(char_idx, mode_normal, mode_live, mode_record);
+                    text_candidate = 1'b1;
+                end
+            end
+            // Bottom-center note label: NOTE:xxx
+            else if ((pixel >= 10'd264) && (pixel < 10'd360)) begin
+                rel_x          = pixel - 10'd264;
+                char_idx       = char_idx_12(rel_x);
+                if (char_idx < 8) begin
+                    char_x0        = 264 + char_idx*12;
+                    char_y0        = 408;
+                    ch             = note_label_char(char_idx, note_hundreds, note_tens, note_ones);
+                    text_candidate = 1'b1;
+                end
+            end
+            // Bottom-right instrument label: INSTR: XXXXXXX
+            else if ((pixel >= 10'd420) && (pixel < 10'd588)) begin
+                rel_x          = pixel - 10'd420;
+                char_idx       = char_idx_12(rel_x);
+                if (char_idx < 14) begin
+                    char_x0        = 420 + char_idx*12;
+                    char_y0        = 408;
+                    ch             = instr_label_char(char_idx, ui_active_instrument);
+                    text_candidate = 1'b1;
+                end
+            end
         end
 
-        // Bottom-right instrument label: INSTR: XXXXXXX
-        for (int i = 0; i < 14; i++) begin
-            unique case (i)
-                0: ch = 8'h49; // I
-                1: ch = 8'h4E; // N
-                2: ch = 8'h53; // S
-                3: ch = 8'h54; // T
-                4: ch = 8'h52; // R
-                5: ch = 8'h3A; // :
-                6: ch = 8'h20;
-                default: ch = instrument_char(ui_active_instrument, i - 7);
-            endcase
-            if (char_pixel(render_x, render_y, 420 + i*12, 408, ch))
-                text_hit = 1'b1;
-        end
+        if (text_candidate && char_pixel(pixel, line, char_x0, char_y0, ch))
+            text_hit = 1'b1;
 
         if (text_hit)
-            rgb_comb = 12'hEEE;
+            rgb_next = 12'hEEE;
     end
+    
+
+//    always_ff @(posedge clk) begin
+//        if (rst)
+//            rgb_reg <= '0;
+//        else 
+//            rgb_reg <= rgb_next;
+//    end
+
 endmodule
