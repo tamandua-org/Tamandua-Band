@@ -107,27 +107,116 @@ module dawDisplayInterface #(
         end
     end
 
-    // VGA timing
-    pixelColor_t color;
-    logic [9:0] pixel;
-    logic [9:0] line;
-    logic [11:0] rgb_next;
-    logic [11:0] rgb_reg;
+    // --------------------------------------------------------------------
+    // VGA timing + renderer pipeline
+    //
+    // The old version drove the VGA refresher with one big combinational
+    // pixel renderer. This version keeps the same 640x480 timing but
+    // registers the pixel coordinates, rendered color, sync and blanking.
+    //
+    // Pipeline at clk25mhz:
+    //   counter pixel -> render_x/render_y -> rgb_s1 -> RGB
+    //
+    // hSync/vSync/blanking are delayed through the same pipeline, so the
+    // delayed RGB remains aligned with the delayed VGA timing.
+    // --------------------------------------------------------------------
+    logic        clk25mhz;
 
-    vgaRefresher refresher (
-        .clk100mhz     (clk),
-        .rst           (rst),
-        .pixelColorIn  (color),
-        .hSync         (hSync),
-        .vSync         (vSync),
-        .pixel         (pixel),
-        .line          (line),
-        .pixelColorOut (RGB)
+    logic [9:0]  h_cnt;
+    logic [9:0]  v_cnt;
+
+    logic [9:0]  render_x;
+    logic [9:0]  render_y;
+
+    logic        hsync_s0;
+    logic        vsync_s0;
+    logic        blank_s0;
+
+    logic        hsync_s1;
+    logic        vsync_s1;
+    logic        blank_s1;
+
+    logic [11:0] rgb_comb;
+    logic [11:0] rgb_s1;
+
+    vgaClock clkgen (
+        .clk_out1(clk25mhz),
+        .reset   (rst),
+        .clk_in1 (clk)
     );
 
-    assign color.red   = rgb_next[11:8];
-    assign color.green = rgb_next[7:4];
-    assign color.blue  = rgb_next[3:0];
+    function automatic logic hsync_for(input logic [9:0] x);
+        begin
+            hsync_for = !((x >= 10'd656) && (x < 10'd752));
+        end
+    endfunction
+
+    function automatic logic vsync_for(input logic [9:0] y);
+        begin
+            vsync_for = !((y >= 10'd490) && (y < 10'd492));
+        end
+    endfunction
+
+    function automatic logic blank_for(input logic [9:0] x, input logic [9:0] y);
+        begin
+            blank_for = (x >= 10'd640) || (y >= 10'd480);
+        end
+    endfunction
+
+    always_ff @(posedge clk25mhz) begin
+        if (rst) begin
+            h_cnt    <= 10'd0;
+            v_cnt    <= 10'd0;
+
+            render_x <= 10'd0;
+            render_y <= 10'd0;
+
+            hsync_s0 <= 1'b1;
+            vsync_s0 <= 1'b1;
+            blank_s0 <= 1'b1;
+
+            hsync_s1 <= 1'b1;
+            vsync_s1 <= 1'b1;
+            blank_s1 <= 1'b1;
+
+            rgb_s1   <= 12'h000;
+
+            hSync    <= 1'b1;
+            vSync    <= 1'b1;
+            RGB      <= 12'h000;
+        end else begin
+            // Stage 0: capture the pixel currently being scanned.
+            render_x <= h_cnt;
+            render_y <= v_cnt;
+
+            hsync_s0 <= hsync_for(h_cnt);
+            vsync_s0 <= vsync_for(v_cnt);
+            blank_s0 <= blank_for(h_cnt, v_cnt);
+
+            // Stage 1: capture rendered color for the previously captured pixel.
+            rgb_s1   <= rgb_comb;
+            hsync_s1 <= hsync_s0;
+            vsync_s1 <= vsync_s0;
+            blank_s1 <= blank_s0;
+
+            // Output stage: RGB and sync are delayed by the same amount.
+            hSync    <= hsync_s1;
+            vSync    <= vsync_s1;
+            RGB      <= blank_s1 ? 12'h000 : rgb_s1;
+
+            // VGA counters: 800 x 525 total timing.
+            if (h_cnt == 10'd799) begin
+                h_cnt <= 10'd0;
+
+                if (v_cnt == 10'd524)
+                    v_cnt <= 10'd0;
+                else
+                    v_cnt <= v_cnt + 10'd1;
+            end else begin
+                h_cnt <= h_cnt + 10'd1;
+            end
+        end
+    end
 
     // --------------------------------------------------------------------
     // Small 5x7 font. Only one scale is used: 2x, so a char is 10x14 px.
@@ -487,7 +576,48 @@ module dawDisplayInterface #(
             bpm_ones     <= bpm % 8'd10;
         end
     end
-    
+
+
+    // Precompute note display digits and the 32-note visible window outside
+    // of the per-pixel renderer. This removes divisions and note-window
+    // comparisons from the VGA pixel path.
+    logic [3:0] note_hundreds;
+    logic [3:0] note_tens;
+    logic [3:0] note_ones;
+    logic [6:0] visible_min_reg;
+    logic [6:0] visible_max_reg;
+    logic [5:0] selected_note_row_reg;
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            // Default selected note is usually MIDI 60.
+            note_hundreds         <= 4'd0;
+            note_tens             <= 4'd6;
+            note_ones             <= 4'd0;
+            visible_min_reg       <= 7'd44;
+            visible_max_reg       <= 7'd75;
+            selected_note_row_reg <= 6'd15;
+        end else begin
+            note_hundreds <= ui_active_note_slot / 7'd100;
+            note_tens     <= (ui_active_note_slot % 7'd100) / 7'd10;
+            note_ones     <= ui_active_note_slot % 7'd10;
+
+            if (ui_active_note_slot < 7'd16) begin
+                visible_min_reg       <= 7'd0;
+                visible_max_reg       <= 7'd31;
+                selected_note_row_reg <= 7'd31 - ui_active_note_slot;
+            end else if (ui_active_note_slot > 7'd111) begin
+                visible_min_reg       <= 7'd96;
+                visible_max_reg       <= 7'd127;
+                selected_note_row_reg <= 7'd127 - ui_active_note_slot;
+            end else begin
+                visible_min_reg       <= ui_active_note_slot - 7'd16;
+                visible_max_reg       <= ui_active_note_slot + 7'd15;
+                selected_note_row_reg <= 6'd15;
+            end
+        end
+    end
+
     // Combinational renderer
     always_comb begin
         int local_x;
@@ -502,26 +632,15 @@ module dawDisplayInterface #(
         logic in_grid;
         logic note_hit;
         logic text_hit;
-        logic [6:0] visible_min;
-        logic [6:0] visible_max;
         logic [6:0] pitch;
         logic [7:0] ch;
 
-        rgb_next = 12'h000;
+        rgb_comb = 12'h000;
         text_hit = 1'b0;
 
-        // visible pitch window: 32 notes centered approximately around selected note
-        if (ui_active_note_slot < 7'd16)
-            visible_min = 7'd0;
-        else if (ui_active_note_slot > 7'd111)
-            visible_min = 7'd96;
-        else
-            visible_min = ui_active_note_slot - 7'd16;
-        visible_max = visible_min + 7'd31;
-
         // Main outer panel
-        if (border_rect(pixel, line, 24, 18, 592, 424, 2))
-            rgb_next = 12'h333;
+        if (border_rect(render_x, render_y, 24, 18, 592, 424, 2))
+            rgb_comb = 12'h333;
 
         // Top-left octave label: OCT:4.
         // This uses the octave selected in dawController with comma/dot,
@@ -536,7 +655,7 @@ module dawDisplayInterface #(
                 default: ch = 8'h20;
             endcase
 
-            if (char_pixel(pixel, line, 38 + i*12, 32, ch))
+            if (char_pixel(render_x, render_y, 38 + i*12, 32, ch))
                 text_hit = 1'b1;
         end
 
@@ -544,26 +663,26 @@ module dawDisplayInterface #(
         for (int i = 0; i < NUM_PATTERNS; i++) begin
             bx = 160 + (i * 32);
 
-            if (in_rect(pixel, line, bx, 28, 26, 30)) begin
+            if (in_rect(render_x, render_y, bx, 28, 26, 30)) begin
                 if (ui_active_pattern == i[PATTERN_ID_BITS-1:0])
-                    rgb_next = 12'h073;
+                    rgb_comb = 12'h073;
                 else if (mute_mask[i])
-                    rgb_next = 12'h300;
+                    rgb_comb = 12'h300;
                 else
-                    rgb_next = 12'h111;
+                    rgb_comb = 12'h111;
             end
 
-            if (border_rect(pixel, line, bx, 28, 26, 30, 2)) begin
+            if (border_rect(render_x, render_y, bx, 28, 26, 30, 2)) begin
                 if (ui_active_pattern == i[PATTERN_ID_BITS-1:0])
-                    rgb_next = 12'h0F6;
+                    rgb_comb = 12'h0F6;
                 else if (mute_mask[i])
-                    rgb_next = 12'hF33;
+                    rgb_comb = 12'hF33;
                 else
-                    rgb_next = 12'h555;
+                    rgb_comb = 12'h555;
             end
 
             ch = (i == 9) ? 8'h30 : digit_ascii(i[3:0] + 4'd1);
-            if (char_pixel(pixel, line, bx + 8, 36, ch))
+            if (char_pixel(render_x, render_y, bx + 8, 36, ch))
                 text_hit = 1'b1;
         end
 
@@ -579,31 +698,31 @@ module dawDisplayInterface #(
                 6: ch = digit_ascii(bpm_ones);
                 default: ch = 8'h20;
             endcase
-            if (char_pixel(pixel, line, 514 + i*12, 32, ch))
+            if (char_pixel(render_x, render_y, 514 + i*12, 32, ch))
                 text_hit = 1'b1;
         end
 
         // Piano-roll / pattern grid
-        in_grid = in_rect(pixel, line, GRID_X, GRID_Y, GRID_W, GRID_H);
+        in_grid = in_rect(render_x, render_y, GRID_X, GRID_Y, GRID_W, GRID_H);
         if (in_grid) begin
-            local_x  = pixel - GRID_X;
-            local_y  = line  - GRID_Y;
+            local_x  = render_x - GRID_X;
+            local_y  = render_y - GRID_Y;
             grid_col = local_x >> 3; // / STEP_W
             grid_row = local_y >> 3; // / NOTE_H
 
             // background + selected pitch row
-            if (grid_row == (visible_max - ui_active_note_slot))
-                rgb_next = 12'h112;
+            if (grid_row == selected_note_row_reg)
+                rgb_comb = 12'h112;
             else
-                rgb_next = 12'h010;
+                rgb_comb = 12'h010;
 
             // semiquaver/beat/bar grid lines
             if (local_x[2:0] == 3'd0 || local_y[2:0] == 3'd0)
-                rgb_next = 12'h222;
+                rgb_comb = 12'h222;
             if ((grid_col[1:0] == 2'd0) && (local_x[2:0] < 3'd2))
-                rgb_next = 12'h333;
+                rgb_comb = 12'h333;
             if ((grid_col[3:0] == 4'd0) && (local_x[2:0] < 3'd3))
-                rgb_next = 12'h555;
+                rgb_comb = 12'h555;
 
             // note blocks
             note_hit = 1'b0;
@@ -611,8 +730,8 @@ module dawDisplayInterface #(
                 for (int n = 0; n < MAX_NOTES; n++) begin
                     if (pattern_cache[grid_col[5:0]].notes[n].active) begin
                         pitch = pattern_cache[grid_col[5:0]].notes[n].note_delta;
-                        if (pitch >= visible_min && pitch <= visible_max) begin
-                            note_row = visible_max - pitch;
+                        if (pitch >= visible_min_reg && pitch <= visible_max_reg) begin
+                            note_row = visible_max_reg - pitch;
                             if (grid_row == note_row)
                                 note_hit = 1'b1;
                         end
@@ -621,16 +740,16 @@ module dawDisplayInterface #(
             end
 
             if (note_hit)
-                rgb_next = 12'h0C7;
+                rgb_comb = 12'h0C7;
 
             // playback cursor
             if ((grid_col[5:0] == current_playback_step) && (local_x[2:0] < 3'd2))
-                rgb_next = is_playing ? 12'hFF0 : 12'h777;
+                rgb_comb = is_playing ? 12'hFF0 : 12'h777;
         end
 
         // Grid border
-        if (border_rect(pixel, line, GRID_X, GRID_Y, GRID_W, GRID_H, 2))
-            rgb_next = 12'hAAA;
+        if (border_rect(render_x, render_y, GRID_X, GRID_Y, GRID_W, GRID_H, 2))
+            rgb_comb = 12'hAAA;
 
         // Bottom-left mode label: MODE: NORMAL/LIVE/RECORD/WAIT
         for (int i = 0; i < 12; i++) begin
@@ -643,7 +762,7 @@ module dawDisplayInterface #(
                 5: ch = 8'h20;
                 default: ch = mode_char(mode_normal, mode_live, mode_record, i - 6);
             endcase
-            if (char_pixel(pixel, line, 38 + i*12, 408, ch))
+            if (char_pixel(render_x, render_y, 38 + i*12, 408, ch))
                 text_hit = 1'b1;
         end
 
@@ -655,12 +774,12 @@ module dawDisplayInterface #(
                 2: ch = 8'h54; // T
                 3: ch = 8'h45; // E
                 4: ch = 8'h3A; // :
-                5: ch = digit_ascii(ui_active_note_slot / 7'd100);
-                6: ch = digit_ascii((ui_active_note_slot % 7'd100) / 7'd10);
-                7: ch = digit_ascii(ui_active_note_slot % 7'd10);
+                5: ch = digit_ascii(note_hundreds);
+                6: ch = digit_ascii(note_tens);
+                7: ch = digit_ascii(note_ones);
                 default: ch = 8'h20;
             endcase
-            if (char_pixel(pixel, line, 264 + i*12, 408, ch))
+            if (char_pixel(render_x, render_y, 264 + i*12, 408, ch))
                 text_hit = 1'b1;
         end
 
@@ -676,19 +795,11 @@ module dawDisplayInterface #(
                 6: ch = 8'h20;
                 default: ch = instrument_char(ui_active_instrument, i - 7);
             endcase
-            if (char_pixel(pixel, line, 420 + i*12, 408, ch))
+            if (char_pixel(render_x, render_y, 420 + i*12, 408, ch))
                 text_hit = 1'b1;
         end
 
         if (text_hit)
-            rgb_next = 12'hEEE;
+            rgb_comb = 12'hEEE;
     end
-    
-//    always_ff @(posedge clk) begin
-//        if (rst)
-//            rgb_reg <= '0;
-//        else 
-//            rgb_reg <= rgb_next;
-//    end
-
 endmodule
