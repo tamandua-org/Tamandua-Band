@@ -8,7 +8,7 @@ package daw_pkg;
     localparam NUM_VOICES = 66; // 10 patterns x 6 notes + 6 notes live play
 
     // Bit Widths
-    localparam PATTERN_ID_BITS = 4;  // 4 bits addresses up to 16 patterns
+    localparam PATTERN_ID_BITS = 4;  // 4 bits addresses up to 16 patterns PATTERN 4'b1111 is reserved for live notes
     localparam NOTE_DELTA_BITS = 7;  // 7-bit delta + 1-bit active flag = 8 bits per cell
     localparam SONG_POS_BITS = 16; // 16 bits = max ~65k semiquavers (~1.5 hours at 120BPM)
     
@@ -65,10 +65,18 @@ package daw_pkg;
 
 
     // Note event fired by the pattern engine into the voice slot allocator
-    typedef struct packed {
+    typedef struct packed { //size: 4 + 7 + 4 + 1 = 16
         instrument_t instrument_id;
         note_delta_t note_delta;
         logic [PATTERN_ID_BITS-1:0] pattern_id;
+        logic is_on_event;
     } note_event_t;
+    
+    typedef struct packed { //size: 4 + 7 + 4 + 1 = 16
+        instrument_t instrument_id;
+        note_delta_t note_delta;
+        logic [PATTERN_ID_BITS-1:0] pattern_id;
+        logic valid;
+    } voice_register_t;
 
 endpackage

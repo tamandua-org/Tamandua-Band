@@ -39,19 +39,19 @@ module tamanduaBand (
         .semiquaver_tick(semiquaver_tick)
     );
     
-    logic [NUM_PATTERNS-1:0]    mute_mask;
+logic [NUM_PATTERNS-1:0]    mute_mask;
     logic [PATTERN_ID_BITS-1:0] ui_active_pattern;
     instrument_t                ui_active_instrument;
     note_delta_t                ui_active_note_slot;
     logic [3:0]                 current_octave;
     logic                       is_playing;
-    logic step_forward_pulse;
-    logic step_backward_pulse;
+    logic                       step_forward_pulse;
+    logic                       step_backward_pulse;
     logic                       mode_normal, mode_live, mode_record;
     logic                       clear_pattern_pulse;
-    logic                       live_note_on, live_note_off;
-    note_delta_t                live_pitch;
-    logic                       ram_write_enable;
+    
+    note_event_t                live_event; 
+    logic                       live_valid;
     
     dawController controller (
         .clk(clk), 
@@ -73,9 +73,8 @@ module tamanduaBand (
         .mode_live(mode_live),
         .mode_record(mode_record),
         .clear_pattern_pulse(clear_pattern_pulse),
-        .live_note_on(live_note_on),
-        .live_note_off(live_note_off),
-        .live_pitch(live_pitch)
+        .live_valid(live_valid),
+        .live_note(live_event)
     );
 
     instrument_t instrument_regs [NUM_PATTERNS];
@@ -97,8 +96,8 @@ module tamanduaBand (
     logic        engine_valid;
     
     // outputs for voice allocator
-    note_event_t note_on_event, note_off_event;
-    logic        note_on_valid, note_off_valid;
+    note_event_t seq_event;
+    logic        seq_valid;
     
     patternEngine engine (
         .clk(clk),
@@ -118,10 +117,8 @@ module tamanduaBand (
         
         .instrument_regs(instrument_regs), //we give access to the registers to the pattern engine
         
-        .note_on_event(note_on_event),
-        .note_on_valid(note_on_valid),
-        .note_off_event(note_off_event),
-        .note_off_valid(note_off_valid)
+        .seq_valid,
+        .seq_event
     );
     
     logic         ui_req;
@@ -131,6 +128,14 @@ module tamanduaBand (
 
     instrument_t active_pattern_instrument;
     assign active_pattern_instrument = instrument_regs[ui_active_pattern];
+
+    logic        live_note_on;
+    logic        live_note_off;
+    note_delta_t live_pitch;
+    
+    assign live_note_on  = live_valid && live_event.is_on_event;
+    assign live_note_off = live_valid && !live_event.is_on_event;
+    assign live_pitch    = live_event.note_delta;
 
     patternRamWrapper ramWrapper (
         .clk(clk),
@@ -183,6 +188,22 @@ module tamanduaBand (
         .hSync                  (hSync),
         .vSync                  (vSync),
         .RGB                    (RGB)
+    );
+    
+    voice_register_t voices [NUM_VOICES];
+    
+    voice_allocator allocator (
+        .clk(clk),
+        .rst(rstSync),
+
+        .live_valid(live_valid),
+        .live_event(live_event),
+        
+        .seq_valid(seq_valid),
+        .seq_event(seq_event),
+        
+        // outputs for dsps
+        .voices
     );
     
     i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(), .sample(), .mclk, .sclk, .lrclk, .sdata);

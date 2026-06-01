@@ -39,10 +39,8 @@ module patternEngine (
     input  instrument_t                 instrument_regs [NUM_PATTERNS],
 
     // Note events to voice allocator
-    output note_event_t                 note_on_event,
-    output logic                        note_on_valid,
-    output note_event_t                 note_off_event,
-    output logic                        note_off_valid
+    output logic        seq_valid,
+    output note_event_t seq_event
 );
 
     // Step counter
@@ -93,15 +91,13 @@ module patternEngine (
             curr_col       <= '0;
             prev_col       <= '0;
             scan_instrument<= PIANO;
-            note_on_valid  <= 1'b0;
-            note_off_valid <= 1'b0;
-            note_on_event  <= '0;
-            note_off_event <= '0;
+            seq_valid  <= 1'b0;
+            seq_event  <= '0;
             ram_req        <= 1'b0;
             ram_addr       <= '0;
         end else begin
-            note_on_valid  <= 1'b0;
-            note_off_valid <= 1'b0;
+            seq_valid  <= 1'b0;
+            seq_event  <= '0;
             ram_req        <= 1'b0;
 
             case (state)
@@ -168,10 +164,11 @@ module patternEngine (
                             end
  
                             if (!found_in_prev) begin // send pulse of note
-                                note_on_valid               <= 1'b1;
-                                note_on_event.instrument_id <= scan_instrument;
-                                note_on_event.note_delta    <= curr_col.notes[scan_note].note_delta;
-                                note_on_event.pattern_id <= scan_pattern;
+                                seq_valid  <= 1'b0;
+                                seq_event.instrument_id <= scan_instrument;
+                                seq_event.note_delta <= curr_col.notes[scan_note].note_delta;
+                                seq_event.pattern_id <= scan_pattern;
+                                seq_event.is_on_event <= 1'b1;
 
                             end
                         end
@@ -197,10 +194,11 @@ module patternEngine (
                             end
  
                             if (!found_in_curr) begin
-                                note_off_valid               <= 1'b1;
-                                note_off_event.instrument_id <= scan_instrument;
-                                note_off_event.note_delta    <= prev_col.notes[scan_note].note_delta;
-                                note_off_event.pattern_id <= scan_pattern;
+                                seq_valid  <= 1'b0;
+                                seq_event.instrument_id <= scan_instrument;
+                                seq_event.note_delta <= curr_col.notes[scan_note].note_delta;
+                                seq_event.pattern_id <= scan_pattern;
+                                seq_event.is_on_event <= 1'b0;
 
                             end
                         end

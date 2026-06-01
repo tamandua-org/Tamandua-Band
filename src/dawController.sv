@@ -27,9 +27,8 @@ module dawController (
     
     // --- Action Pulses ---
     output logic        clear_pattern_pulse, // Tells the RAM to wipe the current pattern
-    output logic        live_note_on,
-    output logic        live_note_off, 
-    output note_delta_t  live_pitch
+    output logic live_valid,
+    output note_event_t live_note
 );
 
     localparam logic [7:0] NOTE_MAPPED_KEYS [0:12] = '{
@@ -128,8 +127,8 @@ always_ff @(posedge clk) begin
             step_forward_pulse   <= '0;
             step_backward_pulse   <= '0;
             clear_pattern_pulse  <= 1'b0;
-            live_note_on      <= 1'b0;
-            live_note_off        <= 1'b0;
+            live_note      <= '0;
+            live_valid       <= 1'b0;
             current_octave       <= 3'd4; 
             ui_active_note_slot  <= 7'd60; // start at Do4        
             countdown_active     <= 1'b0;
@@ -137,8 +136,8 @@ always_ff @(posedge clk) begin
         end else begin
             // Reset 1-cycle pulses
             clear_pattern_pulse <= 1'b0;
-            live_note_on     <= 1'b0;
-            live_note_off       <= 1'b0;
+            live_note      <= '0;
+            live_valid       <= 1'b0;
             step_forward_pulse  <= 1'b0;
             step_backward_pulse <= 1'b0;
 
@@ -257,8 +256,11 @@ always_ff @(posedge clk) begin
                                 default: begin
                                     for (int i = 0; i < 13; i++) begin
                                         if (active_scancode == NOTE_MAPPED_KEYS[i]) begin
-                                            live_note_on <= 1'b1;
-                                            live_pitch <= (current_octave * 7'd12) + 7'd12 + 7'(i); //we use midi standard, Do4 is pitch 60
+                                            live_valid <= 1'b1;
+                                            live_note.is_on_event <= 1'b1;
+                                            live_note.note_delta <= (current_octave * 7'd12) + 7'd12 + 7'(i);
+                                            live_note.instrument_id <= ui_active_instrument;
+                                            live_note.pattern_id <= '1; //mark it as live event
                                         end
                                     end
                                 end
@@ -269,10 +271,13 @@ always_ff @(posedge clk) begin
            end else if (key_released) begin
                 for (int i = 0; i < 13; i++) begin 
                     if (active_scancode == NOTE_MAPPED_KEYS[i]) begin
-                        live_note_off <= 1'b1; 
                         // maybe a bug when changing the octave mid note playing may start at Do5 and move to Do6 then release key, 
                         // and we will remove Do6 and Do5 will keep playing ? not sure because it depends on how we handle key presses.
-                        live_pitch    <= (current_octave * 7'd12) + 7'd12 + 7'(i);  
+                        live_valid <= 1'b1;
+                        live_note.is_on_event <= 1'b0; //mark it as key release
+                        live_note.note_delta <= (current_octave * 7'd12) + 7'd12 + 7'(i);
+                        live_note.instrument_id <= ui_active_instrument;
+                        live_note.pattern_id <= '1; //mark it as live event
                     end
                 end
                 
