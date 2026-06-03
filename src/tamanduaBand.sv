@@ -194,7 +194,7 @@ module tamanduaBand (
         .seq_valid(seq_valid),
         .seq_event(seq_event),
         
-        // outputs for dsps
+        // outputs for dspAudioEngine
         .fifo_rd_en,
         .fifo_dout,
         .fifo_empty
@@ -204,32 +204,27 @@ module tamanduaBand (
     
     edgeDetector #(.XPOL(1'b0)) lrclkDetector (.clk(clk), .x(lrclk), .xFall(tick_48khz), .xRise());
     
-    logic signed [23:0] sample;
-    logic               audio_out_valid; 
+    logic [23:0] rom_addr;
+    logic [23:0] rom_rdata;
     
-    // (You will instantiate your pitch_to_freq ROM and wire it here)
-    logic [23:0] pitch_step_array [128]; 
+    samplesROM sampleRom (.clka(clk), .addra(rom_addr), .douta(rom_rdata));
+    
+    logic signed [23:0] sample;
+    logic audio_out_valid; 
 
     dspAudioEngine audioEngine (
         .clk(clk),
         .rst(rstSync),
-        
-        // Audio Sync
+
         .tick_48khz, 
         
-        // Mailbox Interface
         .fifo_empty(fifo_empty),
         .fifo_dout(fifo_dout),
         .fifo_rd_en(fifo_rd_en),
         
-        // Math / Pitch Array
-        .pitch_step_array(pitch_step_array),
+        .rom_addr(rom_addr),
+        .rom_rdata(rom_rdata), 
         
-        // Audio ROM Connections (To be implemented!)
-        .rom_addr(),
-        .rom_rdata(24'd0), 
-        
-        // Final Output
         .audio_out(sample),
         .audio_out_valid(audio_out_valid)
     );

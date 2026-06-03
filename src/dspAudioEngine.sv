@@ -6,13 +6,10 @@ module dspAudioEngine (
     
     input  logic tick_48khz, 
     
-    // --- FIFO Mailbox Interface ---
+    // fifo ins
     input  logic        fifo_empty,
     input  note_event_t fifo_dout,
     output logic        fifo_rd_en,
-    
-    // --- Pitch Step Logic ---
-    input  logic [23:0] pitch_step_array [128], 
     
     // access to rom
     output logic [23:0]        rom_addr,
@@ -32,7 +29,7 @@ module dspAudioEngine (
     // voice registers
     env_state_t env_state [NUM_VOICES];
     logic [15:0] env_level [NUM_VOICES];
-    logic [31:0] phase_acc [NUM_VOICES];
+    logic [38:0] phase_acc [NUM_VOICES]; // Q24.15 {rom_addr, fractional_steps}
     
     voice_info_t voice_info [NUM_VOICES];
     
@@ -97,7 +94,7 @@ module dspAudioEngine (
     logic signed [39:0]          mixer_sum;
 
     logic signed [39:0] dsp_mult_reg;
-    logic [31:0]        next_phase_reg;
+    logic [38:0]        next_phase_reg;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -133,7 +130,8 @@ module dspAudioEngine (
                             voice_info[input_slot].pattern_id <= fifo_dout.pattern_id;
                             env_state[input_slot]     <= ENV_ATTACK;
                             env_level[input_slot]     <= '0;
-                            phase_acc[input_slot]     <= {get_instrument_meta(fifo_dout.instrument_id).start_addr[16:0], 15'd0};
+                            phase_acc[input_slot]     <= {get_instrument_meta(fifo_dout.instrument_id).start_addr, 15'd0}; //we init 
+                            
                         end else if (release_slot_found) // off event -> send note to Release phase
                                 env_state[release_slot] <= ENV_RELEASE;
                         
@@ -159,19 +157,21 @@ module dspAudioEngine (
 
                 // tdm math
                 EVAL_VOICE: begin
-                    if (scan_idx == NUM_VOICES) begin
-                        // Master Mixing and Normalization
+                    if (scan_idx == NUM_VOICES) begin // Master Mixing and Normalization
                         logic signed [39:0] normalized;
                         normalized = mixer_sum >>> 4; // Divide by 16 for headroom
                         
-                        if (normalized > 40'd8388607)       audio_out <= 24'd8388607; //max pos int 24
-                        else if (normalized < -40'd8388608) audio_out <= -24'd8388608; //max neg int 24
-                        else                                audio_out <= normalized[23:0];
+                        if (normalized > 40'd8388607) 
+                            audio_out <= 24'd8388607; //max pos int 24
+                        else if (normalized < -40'd8388608) 
+                            audio_out <= -24'd8388608; //max neg int 24
+                        else 
+                            audio_out <= normalized[23:0];
                         
                         audio_out_valid <= 1'b1;
                         state <= IDLE;
                     end else if (env_state[scan_idx] != ENV_OFF) begin 
-                        rom_addr <= phase_acc[scan_idx];
+                        rom_addr <= phase_acc[scan_idx][38:15]; // 24 bits from Q24.15
                         state    <= WAIT_ROM;
                     end else begin
                         scan_idx <= scan_idx + 1'b1;
@@ -182,7 +182,7 @@ module dspAudioEngine (
 
                 CALCULATE_ADSR: begin
                     automatic instrument_meta_t meta = get_instrument_meta(voice_info[scan_idx].inst);
-                    automatic logic [23:0] step_size = pitch_step_array[voice_info[scan_idx].pitch];
+                    automatic logic [23:0] step_size = midi_to_pitch_step(voice_info[scan_idx].pitch);
                     automatic logic [15:0] temp_vol  = env_level[scan_idx];
 
                     // ADSR Math
@@ -220,10 +220,10 @@ module dspAudioEngine (
                     env_level[scan_idx] <= temp_vol;
                     
                     // Start pipelining for the final values from this voice entry
-                    dsp_mult_reg <= rom_rdata * $signed({1'b0, temp_vol}); // we obtain the voice at the proper volume (we need to shift)
+                    dsp_mult_reg <= rom_rdata * $signed({1'b0, temp_vol}); // we obtain the voice at the proper volume (we need to shiftr after)
                     
                     // Pre-calculate the next phase position
-                    next_phase_reg <= phase_acc[scan_idx] + step_size;
+                    next_phase_reg <= phase_acc[scan_idx] + step_size; // the sum will affect the fractional bits
 
                     state <= MULTIPLY_AND_MIX;
                 end
@@ -231,12 +231,14 @@ module dspAudioEngine (
                 MULTIPLY_AND_MIX: begin
                     automatic instrument_meta_t meta = get_instrument_meta(voice_info[scan_idx].inst);
 
-                    mixer_sum <= mixer_sum + (dsp_mult_reg >>> 16); // shift reg from previous stage
+                    mixer_sum <= mixer_sum + (dsp_mult_reg >>> 16); // shiftr data from previous stage
 
-                    // Apply the pre-calculated phase
-                    if (next_phase_reg >= meta.end_addr) begin
-                        if (meta.mode == NATURAL) env_state[scan_idx] <= ENV_OFF; 
-                        else                      phase_acc[scan_idx] <= meta.loop_start; 
+                    if (next_phase_reg[38:15] >= meta.end_addr) begin
+                        if (meta.mode == NATURAL) 
+                            env_state[scan_idx] <= ENV_OFF; 
+                        else
+                            phase_acc[scan_idx] <= {meta.loop_start, 15'd0}; 
+                            
                     end else begin
                         phase_acc[scan_idx] <= next_phase_reg; 
                     end

@@ -1,6 +1,6 @@
 module pruebaSoundGenerator (
     input  logic clk,
-    input  logic rst_prueba,
+    input  logic rst,
     input  logic [15:0] sw,
     input  logic btnL,   // kick
     input  logic btnC,   // snare
@@ -20,8 +20,7 @@ module pruebaSoundGenerator (
     logic rst;
     logic rst_n;
 
-    assign rst   = rst_prueba;
-    assign rst_n = ~rst_prueba;
+    assign rst_n = ~rst;
 
     // ------------------------------------------------------------
     // Debounced button signals
