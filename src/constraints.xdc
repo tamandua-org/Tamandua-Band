@@ -33,6 +33,20 @@ set_property -dict { PACKAGE_PIN T18 IOSTANDARD LVCMOS33 } [get_ports rst];    #
 
 
 ## Para debuggear
+#set_property -dict {PACKAGE_PIN W7 IOSTANDARD LVCMOS33} [get_ports {segs_n[6]}]
+#set_property -dict {PACKAGE_PIN W6 IOSTANDARD LVCMOS33} [get_ports {segs_n[5]}]
+#set_property -dict {PACKAGE_PIN U8 IOSTANDARD LVCMOS33} [get_ports {segs_n[4]}]
+#set_property -dict {PACKAGE_PIN V8 IOSTANDARD LVCMOS33} [get_ports {segs_n[3]}]
+#set_property -dict {PACKAGE_PIN U5 IOSTANDARD LVCMOS33} [get_ports {segs_n[2]}]
+#set_property -dict {PACKAGE_PIN V5 IOSTANDARD LVCMOS33} [get_ports {segs_n[1]}]
+#set_property -dict {PACKAGE_PIN U7 IOSTANDARD LVCMOS33} [get_ports {segs_n[0]}]
+#set_property -dict {PACKAGE_PIN V7 IOSTANDARD LVCMOS33} [get_ports {segs_n[7]}]
+
+#set_property -dict {PACKAGE_PIN U2 IOSTANDARD LVCMOS33} [get_ports {an_n[0]}]
+#set_property -dict {PACKAGE_PIN U4 IOSTANDARD LVCMOS33} [get_ports {an_n[1]}]
+#set_property -dict {PACKAGE_PIN V4 IOSTANDARD LVCMOS33} [get_ports {an_n[2]}]
+#set_property -dict {PACKAGE_PIN W4 IOSTANDARD LVCMOS33} [get_ports {an_n[3]}]
+
 #set_property -dict { PACKAGE_PIN U18 IOSTANDARD LVCMOS33 } [get_ports btnC];    # btnC
 #set_property -dict { PACKAGE_PIN W19 IOSTANDARD LVCMOS33 } [get_ports btnL];    # btnL
 #set_property -dict { PACKAGE_PIN T17 IOSTANDARD LVCMOS33 } [get_ports btnR];    # btnR

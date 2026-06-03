@@ -13,9 +13,7 @@ module i2s_transmitter (
 
     transmitterClk mclkPll (.mclk, .clk100mhz);
 
-    // ----------------------------------------------------------------
-    //  SCLK: divide mclk por 4
-    // ----------------------------------------------------------------
+    //  SCLK divides mclk by 4
     logic [1:0] sclk_div;
     always_ff @(posedge mclk) begin
         if (rst) begin
@@ -31,12 +29,11 @@ module i2s_transmitter (
     logic sclkFall;
     edgeDetector #(.XPOL(0)) sclkEdgeDetector (.clk(mclk), .x(sclk), .xFall(sclkFall), .xRise());
 
-    // ----------------------------------------------------------------
-    //  Pending sample - solo escrito desde clk100mhz
-    // ----------------------------------------------------------------
+
+    //  pending sample written from clk100mhz
     logic [23:0] pending_sample;
     logic        pending_valid;
-    logic        sample_ack;     // pulso desde mclk: "ya cogí el sample"
+    logic        sample_ack;     // ack to tell clk100mhz we've taken the sample
 
     always_ff @(posedge clk100mhz) begin
         if (rst) begin
@@ -47,14 +44,13 @@ module i2s_transmitter (
                 pending_sample <= sample;
                 pending_valid  <= 1'b1;
             end else if (sample_ack) begin
-                pending_valid  <= 1'b0;  // único sitio donde se baja
+                pending_valid  <= 1'b0;  // unico sitio donde se baja
             end
         end
     end
 
-    // ----------------------------------------------------------------
-    //  Shift register - dominio mclk
-    // ----------------------------------------------------------------
+
+    //  Shift register under mclk domain
     logic [23:0] current_sample;
     logic [31:0] shift_reg;
     logic [5:0]  bit_cnt;

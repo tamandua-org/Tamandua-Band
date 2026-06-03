@@ -39,7 +39,7 @@ module tamanduaBand (
         .semiquaver_tick(semiquaver_tick)
     );
     
-logic [NUM_PATTERNS-1:0]    mute_mask;
+    logic [NUM_PATTERNS-1:0]    mute_mask;
     logic [PATTERN_ID_BITS-1:0] ui_active_pattern;
     instrument_t                ui_active_instrument;
     note_delta_t                ui_active_note_slot;
@@ -53,6 +53,8 @@ logic [NUM_PATTERNS-1:0]    mute_mask;
     note_event_t                live_event; 
     logic                       live_valid;
     
+    instrument_t instrument_regs [NUM_PATTERNS];
+
     dawController controller (
         .clk(clk), 
         .rst(rstSync), 
@@ -69,25 +71,17 @@ logic [NUM_PATTERNS-1:0]    mute_mask;
         .is_playing(is_playing),
         .step_forward_pulse(step_forward_pulse),
         .step_backward_pulse(step_backward_pulse),
+        
+        .instrument_regs,
+        
         .mode_normal(mode_normal),
         .mode_live(mode_live),
         .mode_record(mode_record),
+        
         .clear_pattern_pulse(clear_pattern_pulse),
         .live_valid(live_valid),
         .live_note(live_event)
     );
-
-    instrument_t instrument_regs [NUM_PATTERNS];
-
-    always_ff @(posedge clk) begin
-        if (rstSync) begin
-            for (int i = 0; i < NUM_PATTERNS; i++) begin
-                instrument_regs[i] <= PIANO;
-            end
-        end else begin
-            instrument_regs[ui_active_pattern] <= ui_active_instrument; // save changed instrument to the current pattern
-        end
-    end
     
     logic [5:0]  current_playback_step;
     logic        engine_req;
@@ -99,7 +93,7 @@ logic [NUM_PATTERNS-1:0]    mute_mask;
     note_event_t seq_event;
     logic        seq_valid;
     
-    patternEngine engine (
+    patternEngine patternEngine (
         .clk(clk),
         .rst(rstSync),
         .semiquaver_tick(semiquaver_tick),
@@ -125,9 +119,6 @@ logic [NUM_PATTERNS-1:0]    mute_mask;
     logic [9:0]   ui_addr;
     pattern_col_t ui_rdata;
     logic         ui_valid;
-
-    instrument_t active_pattern_instrument;
-    assign active_pattern_instrument = instrument_regs[ui_active_pattern];
 
     logic        live_note_on;
     logic        live_note_off;
@@ -171,7 +162,7 @@ logic [NUM_PATTERNS-1:0]    mute_mask;
         .bpm                    (bpm_out),
         .mute_mask              (mute_mask),
         .ui_active_pattern      (ui_active_pattern),
-        .ui_active_instrument   (active_pattern_instrument),
+        .ui_active_instrument   (ui_active_instrument),
         .ui_active_note_slot    (ui_active_note_slot),
         .current_octave         (current_octave),
         .is_playing             (is_playing),
@@ -190,9 +181,10 @@ logic [NUM_PATTERNS-1:0]    mute_mask;
         .RGB                    (RGB)
     );
     
-    voice_register_t voices [NUM_VOICES];
+    logic fifo_rd_en, fifo_empty;
+    logic [15:0] fifo_dout;
     
-    voice_allocator allocator (
+    noteQueueManager noteQueue (
         .clk(clk),
         .rst(rstSync),
 
@@ -203,9 +195,45 @@ logic [NUM_PATTERNS-1:0]    mute_mask;
         .seq_event(seq_event),
         
         // outputs for dsps
-        .voices
+        .fifo_rd_en,
+        .fifo_dout,
+        .fifo_empty
     );
     
-    i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(), .sample(), .mclk, .sclk, .lrclk, .sdata);
+    logic tick_48khz;
+    
+    edgeDetector #(.XPOL(1'b0)) lrclkDetector (.clk(clk), .x(lrclk), .xFall(tick_48khz), .xRise());
+    
+    logic signed [23:0] sample;
+    logic               audio_out_valid; 
+    
+    // (You will instantiate your pitch_to_freq ROM and wire it here)
+    logic [23:0] pitch_step_array [128]; 
+
+    dspAudioEngine audioEngine (
+        .clk(clk),
+        .rst(rstSync),
+        
+        // Audio Sync
+        .tick_48khz, 
+        
+        // Mailbox Interface
+        .fifo_empty(fifo_empty),
+        .fifo_dout(fifo_dout),
+        .fifo_rd_en(fifo_rd_en),
+        
+        // Math / Pitch Array
+        .pitch_step_array(pitch_step_array),
+        
+        // Audio ROM Connections (To be implemented!)
+        .rom_addr(),
+        .rom_rdata(24'd0), 
+        
+        // Final Output
+        .audio_out(sample),
+        .audio_out_valid(audio_out_valid)
+    );
+    
+    i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(audio_out_valid), .sample, .mclk, .sclk, .lrclk, .sdata);
 
 endmodule

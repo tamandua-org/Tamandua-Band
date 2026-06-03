@@ -25,8 +25,8 @@ entity edgeDetector is
   port (
     clk   : in  std_logic;   -- reloj del sistema
     x     : in  std_logic;   -- entrada binaria con flancos a detectar
-    xFall : out std_logic;   -- se activa durante 1 ciclo cada vez que detecta un flanco de subida en x
-    xRise : out std_logic    -- se activa durante 1 ciclo cada vez que detecta un flanco de bajada en x
+    xFall : out std_logic;   -- se activa durante 1 ciclo cada vez que detecta un flanco de bajada en x
+    xRise : out std_logic    -- se activa durante 1 ciclo cada vez que detecta un flanco de subida en x
   );
 end edgeDetector;
 

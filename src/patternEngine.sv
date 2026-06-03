@@ -182,9 +182,8 @@ module patternEngine (
                         scan_pattern <= scan_pattern + 1'b1;
                         state        <= EVAL_MUTE;
                     end else begin
-                        // Check if prev_col.notes[scan_note] ended (active in prev but pitch not found anywhere in curr) (only for GATED notes)
-                        if (prev_col.notes[scan_note].active &&
-                            get_end_mode(scan_instrument) == GATED) begin
+                        // Check if prev_col.notes[scan_note] ended (active in prev but pitch not found anywhere in curr)
+                        if (prev_col.notes[scan_note].active) begin
                             logic found_in_curr;
                             found_in_curr = 1'b0;
                             for (int i = 0; i < MAX_NOTES; i++) begin

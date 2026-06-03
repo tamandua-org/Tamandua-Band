@@ -13,8 +13,8 @@ package daw_pkg;
     localparam SONG_POS_BITS = 16; // 16 bits = max ~65k semiquavers (~1.5 hours at 120BPM)
     
     typedef enum logic {
-        NATURAL = 1'b0,  // play to sample end (drums, hits)
-        GATED   = 1'b1   // play until note-off (piano, synth)
+        NATURAL = 1'b0,  // play to sample end (drumkit, piano)
+        GATED   = 1'b1   // loop until note off event (trumpet, synth)
     } end_mode_t;
     
     typedef enum logic [3:0] {
@@ -26,14 +26,6 @@ package daw_pkg;
         SYNTH,
         GUITAR
     } instrument_t;
-    
-    function automatic end_mode_t get_end_mode(instrument_t inst);
-        case (inst)
-            KICK, SNARE, HIHAT : return NATURAL;
-            PIANO, SYNTH, GUITAR, TRUMPET : return GATED;
-            default : return NATURAL;
-        endcase
-    endfunction
 
     // 0 to 127
     typedef logic [NOTE_DELTA_BITS-1:0] note_delta_t;
@@ -54,15 +46,6 @@ package daw_pkg;
     typedef struct packed {
         cell_t [MAX_NOTES-1:0] notes; // notes[0] to notes[5]
     } pattern_col_t;  
-    
-    // An ordered array of these will make up a track timeline
-//    typedef struct packed {
-//        logic valid;
-//        logic [SONG_POS_BITS-1:0] start_semiquaver; // time pos
-//        logic [PATTERN_ID_BITS-1:0] pattern_id;
-//        instrument_t instrument;
-//    } track_entry_t;
-
 
     // Note event fired by the pattern engine into the voice slot allocator
     typedef struct packed { //size: 4 + 7 + 4 + 1 = 16
@@ -72,11 +55,38 @@ package daw_pkg;
         logic is_on_event;
     } note_event_t;
     
-    typedef struct packed { //size: 4 + 7 + 4 + 1 = 16
-        instrument_t instrument_id;
-        note_delta_t note_delta;
-        logic [PATTERN_ID_BITS-1:0] pattern_id;
-        logic valid;
-    } voice_register_t;
+    // states of ADSR envelope
+    typedef enum logic [2:0] {
+        ENV_OFF,
+        ENV_ATTACK,
+        ENV_DECAY,
+        ENV_SUSTAIN,
+        ENV_RELEASE
+    } env_state_t;
+
+    // Defines how an instrument loops and fades
+    typedef struct packed {
+        logic [23:0] start_addr; // por ahora 
+        logic [23:0] end_addr;
+        logic [23:0] loop_start;
+        end_mode_t   mode;          // NATURAL or GATED
+        
+        // ADSR Math: Added/subtracted per 48kHz tick (0 to 65535)
+        logic [15:0] attack_rate;   
+        logic [15:0] decay_rate;    
+        logic [15:0] sustain_level; 
+        logic [15:0] release_rate;
+    } instrument_meta_t;
+
+    function automatic instrument_meta_t get_instrument_meta(instrument_t inst);
+        case (inst)
+                    //     START      END        LOOP       MODE       A          D          S          R
+            KICK:  return '{24'd0,     24'd10000, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000}; 
+            SNARE: return '{24'd10000, 24'd25000, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000};
+            PIANO: return '{24'd25000, 24'd80000, 24'd0,     GATED,   16'd5000,  16'd100,   16'd30000, 16'd500};   
+            SYNTH: return '{24'd80000, 24'd82000, 24'd80500, GATED,   16'd1000,  16'd50,    16'd40000, 16'd200};   
+            default: return '{24'd0, 24'd1000, 24'd0, NATURAL, 16'd65535, 16'd0, 16'd65535, 16'd65535};
+        endcase
+    endfunction
 
 endpackage

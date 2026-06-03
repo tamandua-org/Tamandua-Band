@@ -1,6 +1,6 @@
 import daw_pkg::*;
 
-module voice_allocator (
+module noteQueueManager (
     input  logic        clk,
     input  logic        rst,
     
@@ -12,7 +12,10 @@ module voice_allocator (
     input  logic        seq_valid,
     input  note_event_t seq_event,
     
-    output voice_register_t voices [NUM_VOICES]
+    // to dsp engine
+    input  logic        fifo_rd_en,
+    output note_event_t fifo_dout,
+    output logic        fifo_empty
 );
 
     // fifo writing
@@ -59,10 +62,6 @@ module voice_allocator (
             end
         end
     end
-
-    logic        fifo_rd_en;
-    note_event_t fifo_dout;
-    logic        fifo_empty;
     
     // fifo is in fwft
     voiceAllocatorFIFO allocatorQueue ( // for now we are using DRAM, change?
@@ -75,43 +74,5 @@ module voice_allocator (
         .full  (fifo_full),
         .empty (fifo_empty)
     );
-
-    // fifo reading
-    assign fifo_rd_en = !fifo_empty; 
-
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            for (int i = 0; i < NUM_VOICES; i++) begin
-                voices[i].valid     <= 1'b0;
-            end
-        end else begin
-            
-            if (!fifo_empty) begin
-                
-                if (!fifo_dout.is_on_event) begin // turn off note
-                    for (int i = 0; i < NUM_VOICES; i++) begin
-                        if (voices[i].valid && voices[i].note_delta == fifo_dout.note_delta && 
-                            voices[i].instrument_id == fifo_dout.instrument_id && voices[i].pattern_id == fifo_dout.pattern_id) 
-                            
-                            voices[i].valid <= 1'b0;
-                    end
-                
-                end else begin // turn on note
-                    logic slot_assigned;
-                    slot_assigned = 1'b0;
-                    
-                    for (int i = 0; i < NUM_VOICES; i++) begin
-                        if (!voices[i].valid && !slot_assigned) begin
-                            voices[i].valid <= 1'b1;
-                            voices[i].note_delta <= fifo_dout.note_delta;
-                            voices[i].instrument_id <= fifo_dout.instrument_id;
-                            voices[i].pattern_id <= fifo_dout.pattern_id;
-                            slot_assigned = 1'b1;
-                        end
-                    end
-                end
-            end  
-        end
-    end
 
 endmodule
