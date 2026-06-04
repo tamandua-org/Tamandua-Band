@@ -207,7 +207,7 @@ module tamanduaBand (
     logic [23:0] rom_addr;
     logic [23:0] rom_rdata;
     
-    samplesROM sampleRom (.clka(clk), .addra(rom_addr), .douta(rom_rdata));
+    samplesROM sampleRom (.clka(clk), .addra(rom_addr[15:0]), .douta(rom_rdata));
     
     logic signed [23:0] sample;
     logic audio_out_valid; 

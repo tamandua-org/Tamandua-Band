@@ -78,7 +78,7 @@ package daw_pkg;
         logic [15:0] release_rate;
     } instrument_meta_t;
 
-    function automatic instrument_meta_t get_instrument_meta(instrument_t inst);
+    function automatic instrument_meta_t get_instrument_meta(input instrument_t inst);
         case (inst)
                     //     START      END        LOOP       MODE       A          D          S          R
             SYNTH: return '{24'd0,     24'd183,   24'd0,     GATED,   16'd35,  16'd50,    16'd40000, 16'd40}; 
@@ -221,7 +221,7 @@ package daw_pkg;
         24'd1571089  // MIDI 127
     };
     
-    function automatic logic [23:0] midi_to_pitch_step(note_delta_t midi_note);
+    function automatic logic [23:0] midi_to_pitch_step(input note_delta_t midi_note);
         return PITCH_STEP_LUT[midi_note];
     endfunction
 
