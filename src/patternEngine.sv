@@ -90,7 +90,7 @@ module patternEngine (
             scan_note      <= '0;
             curr_col       <= '0;
             prev_col       <= '0;
-            scan_instrument<= PIANO;
+            scan_instrument <= PIANO;
             seq_valid  <= 1'b0;
             seq_event  <= '0;
             ram_req        <= 1'b0;
@@ -164,7 +164,7 @@ module patternEngine (
                             end
  
                             if (!found_in_prev) begin // send pulse of note
-                                seq_valid  <= 1'b0;
+                                seq_valid  <= 1'b1;
                                 seq_event.instrument_id <= scan_instrument;
                                 seq_event.note_delta <= curr_col.notes[scan_note].note_delta;
                                 seq_event.pattern_id <= scan_pattern;
@@ -193,9 +193,9 @@ module patternEngine (
                             end
  
                             if (!found_in_curr) begin
-                                seq_valid  <= 1'b0;
+                                seq_valid  <= 1'b1;
                                 seq_event.instrument_id <= scan_instrument;
-                                seq_event.note_delta <= curr_col.notes[scan_note].note_delta;
+                                seq_event.note_delta <= prev_col.notes[scan_note].note_delta;
                                 seq_event.pattern_id <= scan_pattern;
                                 seq_event.is_on_event <= 1'b0;
 

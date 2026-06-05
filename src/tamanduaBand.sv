@@ -12,7 +12,10 @@ module tamanduaBand (
     output logic        sdata,
     output logic        hSync,
     output logic        vSync,
-    output logic [11:0] RGB
+    output logic [11:0] RGB,
+    
+    //test
+    output logic [2:0] led
 );
 
     localparam int FREQ_KHZ = 100_000;
@@ -82,6 +85,11 @@ module tamanduaBand (
         .live_valid(live_valid),
         .live_note(live_event)
     );
+    
+    logic pause_pulse;
+    logic play_pulse;
+    
+    edgeDetector #(.XPOL(0)) playEdgeDetector (.clk(clk), .x(is_playing), .xFall(pause_pulse), .xRise(play_pulse));
     
     logic [5:0]  current_playback_step;
     logic        engine_req;
@@ -200,6 +208,8 @@ module tamanduaBand (
         .fifo_empty
     );
     
+
+    
     logic tick_48khz;
     
     edgeDetector #(.XPOL(1'b0)) lrclkDetector (.clk(clk), .x(lrclk), .xFall(tick_48khz), .xRise());
@@ -211,6 +221,10 @@ module tamanduaBand (
     
     logic signed [23:0] sample;
     logic audio_out_valid; 
+    
+    assign led[0] = audio_out_valid;
+    assign led[1] = |sample;
+    assign led[2] = |rom_rdata;
 
     dspAudioEngine audioEngine (
         .clk(clk),
@@ -228,6 +242,7 @@ module tamanduaBand (
         .audio_out(sample),
         .audio_out_valid(audio_out_valid)
     );
+
     
     i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(audio_out_valid), .sample, .mclk, .sclk, .lrclk, .sdata);
 

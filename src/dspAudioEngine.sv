@@ -58,7 +58,7 @@ module dspAudioEngine (
     
 //    logic [$clog2(NUM_VOICES):0] scan_idx;
     // Force Vivado to keep these registers separate. This should physically divide the fanout by 4
-    // (* equivalent_register_removal = "no" *) 
+    // (* equivalent_register_removal = "no" *) wanted to use this but i think it fails impl with it
     logic [$clog2(NUM_VOICES):0] scan_idx_state;
     logic [$clog2(NUM_VOICES):0] scan_idx_level;
     logic [$clog2(NUM_VOICES):0] scan_idx_phase;
@@ -77,11 +77,12 @@ module dspAudioEngine (
     logic [$clog2(NUM_VOICES)-1:0] target_slot;
     logic                          slot_found;
     
-    // registers to pipeline access to arrays
+    // registers to pipeline access to arrays/reduce fanout
     instrument_meta_t active_meta_reg;
-    logic [23:0]      active_step_reg;
-    logic [15:0]      active_vol_reg;
-    logic [38:0]        active_phase_reg;
+    logic [23:0] active_step_reg;
+    logic [15:0] active_vol_reg;
+    logic [38:0] active_phase_reg;
+    env_state_t active_env_state_reg;
     logic signed [23:0] dsp_rom_reg; // input a 
     logic [15:0]        dsp_vol_reg; // input b
 
@@ -105,15 +106,17 @@ module dspAudioEngine (
                 env_level[i] <= '0;
                 phase_acc[i] <= '0;
                 voice_info[i] <= '0;
-            
-            end
+            end   
+                 
         end else begin
             audio_out_valid <= 1'b0; 
             fifo_rd_en      <= 1'b0;
 
             case (state)
                 IDLE: begin
-                    if (tick_48khz) state <= READ_FIFO;
+                //todo add fix incorporar is playing para empezar, y que cuando se deje de tocar, se deje de hacer sonido
+                // a lo mejor se puede hacer poniendo el is_playing como se�al para enviar el audio_out_valid
+                    if (tick_48khz) state <= READ_FIFO; 
                 end
                 
                 // take items from FIFO
@@ -129,7 +132,7 @@ module dspAudioEngine (
                         scan_idx_phase <= '0;
                         scan_idx_info  <= '0;
                         mixer_sum <= '0; 
-                        state<= EVAL_VOICE;
+                        state <= EVAL_VOICE;
                     end
                 end
                 
@@ -138,7 +141,7 @@ module dspAudioEngine (
                     for(int i = 0; i < NUM_VOICES; i++) begin
                         empty_mask[i] <= (env_state[i] == ENV_OFF);
                         release_mask[i] <= (env_state[i] == ENV_RELEASE);
-                        match_mask[i] <= (env_state[i] != ENV_OFF) && 
+                        match_mask[i] <= (env_state[i] != ENV_OFF) && (env_state[i] != ENV_RELEASE) &&
                                            (voice_info[i].pitch == active_event.note_delta) &&
                                            (voice_info[i].inst == active_event.instrument_id) &&
                                            (voice_info[i].pattern_id == active_event.pattern_id);
@@ -189,12 +192,14 @@ module dspAudioEngine (
                 EVAL_VOICE: begin
                     if (scan_idx_state == NUM_VOICES) begin // Master Mixing and Normalization
                         logic signed [39:0] normalized;
-                        normalized = mixer_sum >>> 4; // Divide by 16 for headroom
+//                        normalized = mixer_sum >>> 4; // Divide by 16 for headroom
+                        normalized = mixer_sum;
+
                         
-                        if (normalized > 40'd8388607) 
-                            audio_out <= 24'd8388607; //max pos int 24
-                        else if (normalized < -40'd8388608) 
-                            audio_out <= -24'd8388608; //max neg int 24
+                        if (normalized > 40'sh7FFFFF) 
+                            audio_out <= 24'sh7FFFFF; //max pos int 24
+                        else if (normalized < -40'sh800000) 
+                            audio_out <= -24'sh800000; //max neg int 24
                         else 
                             audio_out <= normalized[23:0];
                         
@@ -229,6 +234,7 @@ module dspAudioEngine (
                             if (temp_vol >= 16'd65535 - active_meta_reg.attack_rate) begin
                                 temp_vol = 16'd65535;
                                 env_state[scan_idx_state] <= ENV_DECAY;
+//                                active_env_state_reg <= ENV_DECAY; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
                             end else begin
                                 temp_vol = temp_vol + active_meta_reg.attack_rate;
                             end
@@ -238,6 +244,7 @@ module dspAudioEngine (
                             if (temp_vol <= active_meta_reg.sustain_level + active_meta_reg.decay_rate) begin
                                 temp_vol = active_meta_reg.sustain_level;
                                 env_state[scan_idx_state] <= ENV_SUSTAIN;
+//                                active_env_state_reg <= ENV_SUSTAIN;
                             end else begin
                                 temp_vol = temp_vol - active_meta_reg.decay_rate;
                             end
@@ -249,19 +256,16 @@ module dspAudioEngine (
                             if (temp_vol <= active_meta_reg.release_rate) begin
                                 temp_vol = '0;
                                 env_state[scan_idx_state] <= ENV_OFF;
+//                                active_env_state_reg <= ENV_OFF;
                             end else begin
                                 temp_vol = temp_vol - active_meta_reg.release_rate;
                             end
                         end
                     endcase
                     
-                    env_level[scan_idx_level] <= temp_vol;
                     dsp_rom_reg <= rom_rdata;
                     dsp_vol_reg <= temp_vol;
-                    
-                    // Start pipelining for the final values from this voice entry
-                    dsp_mult_reg <= rom_rdata * $signed({1'b0, temp_vol}); // we obtain the voice at the proper volume (we need to shiftr after)
-                    
+     
                     // Pre-calculate the next phase position
                     next_phase_reg <= active_phase_reg + active_step_reg; // the sum will affect the fractional bits
 
@@ -269,8 +273,11 @@ module dspAudioEngine (
                 end
                 
                 MULTIPLY_DSP: begin
+
                     dsp_mult_reg <= dsp_rom_reg * $signed({1'b0, dsp_vol_reg});
-                    
+
+                    env_level[scan_idx_level] <= dsp_vol_reg; // to reduce fanout we update it here even though we could've done it earlier
+//                    env_state[scan_idx_state] <= active_env_state_reg; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
                     state <= SUM_VOICE;
                 end
 
@@ -291,7 +298,7 @@ module dspAudioEngine (
                     scan_idx_level <= scan_idx_level + 1'b1;
                     scan_idx_phase <= scan_idx_phase + 1'b1;
                     scan_idx_info  <= scan_idx_info + 1'b1;
-                    state    <= EVAL_VOICE;
+                    state <= EVAL_VOICE;
                 end
             endcase
         end
