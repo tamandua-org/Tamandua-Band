@@ -6,6 +6,8 @@ module dspAudioEngine (
     
     input  logic tick_48khz, 
     
+    input logic pause_pulse,
+    
     // fifo ins
     input  logic        fifo_empty,
     input  note_event_t fifo_dout,
@@ -88,219 +90,232 @@ module dspAudioEngine (
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            state           <= IDLE;
+            state <= IDLE;
             audio_out <= '0;
             audio_out_valid <= 1'b0;
-            fifo_rd_en      <= 1'b0;
+            fifo_rd_en <= 1'b0;
             mixer_sum <= '0;
 //            scan_idx        <= '0;
             scan_idx_state <= '0;
             scan_idx_level <= '0;
             scan_idx_phase <= '0;
-            scan_idx_info  <= '0;
-            dsp_mult_reg    <= '0;
-            next_phase_reg  <= '0;
+            scan_idx_info <= '0;
+            dsp_mult_reg <= '0;
+            next_phase_reg <= '0;
             
             for (int i = 0; i < NUM_VOICES; i++) begin
                 env_state[i] <= ENV_OFF;
-                env_level[i] <= '0;
-                phase_acc[i] <= '0;
-                voice_info[i] <= '0;
             end   
                  
         end else begin
             audio_out_valid <= 1'b0; 
             fifo_rd_en      <= 1'b0;
-
-            case (state)
-                IDLE: begin
-                //todo add fix incorporar is playing para empezar, y que cuando se deje de tocar, se deje de hacer sonido
-                // a lo mejor se puede hacer poniendo el is_playing como se�al para enviar el audio_out_valid
-                    if (tick_48khz) state <= READ_FIFO; 
+            
+            if (pause_pulse) begin // looper paused
+                for (int i = 0; i < NUM_VOICES; i++) begin
+                    env_state[i] <= ENV_OFF;
                 end
                 
-                // take items from FIFO
-                READ_FIFO: begin
-                    if (!fifo_empty) begin
-                        active_event <= fifo_dout; // we store fifo value
-                        state <= GENERATE_MASKS;
-                        fifo_rd_en <= 1'b1; // we remove the item we just obtained (since we are with FWFT)
-                    end else begin
-//                        scan_idx <= '0;
-                        scan_idx_state <= '0;
-                        scan_idx_level <= '0;
-                        scan_idx_phase <= '0;
-                        scan_idx_info  <= '0;
-                        mixer_sum <= '0; 
-                        state <= EVAL_VOICE;
+                // reset TDM loop
+                state <= IDLE;
+                mixer_sum <= '0;
+                scan_idx_state <= '0;
+                scan_idx_level <= '0;
+                scan_idx_phase <= '0;
+                scan_idx_info <= '0;
+                
+            end else begin
+            
+                case (state)
+                    IDLE: begin
+                    //todo add fix incorporar is playing para empezar, y que cuando se deje de tocar, se deje de hacer sonido
+                    // a lo mejor se puede hacer poniendo el is_playing como se�al para enviar el audio_out_valid
+                        if (tick_48khz) state <= READ_FIFO; 
                     end
-                end
-                
-                GENERATE_MASKS: begin
-                    // simple comparisons in parallel
-                    for(int i = 0; i < NUM_VOICES; i++) begin
-                        empty_mask[i] <= (env_state[i] == ENV_OFF);
-                        release_mask[i] <= (env_state[i] == ENV_RELEASE);
-                        match_mask[i] <= (env_state[i] != ENV_OFF) && (env_state[i] != ENV_RELEASE) &&
-                                           (voice_info[i].pitch == active_event.note_delta) &&
-                                           (voice_info[i].inst == active_event.instrument_id) &&
-                                           (voice_info[i].pattern_id == active_event.pattern_id);
-                    end
-                    state <= DECODE_SLOT;
-                end
-                
-                DECODE_SLOT: begin
-                    slot_found  <= 1'b0; // Default
                     
-                    if (active_event.is_on_event) begin
-                        if (empty_mask != '0) begin
-                            target_slot <= find_first_active_bit(empty_mask);
-                            slot_found  <= 1'b1;
-                        end else if (release_mask != '0) begin
-                            target_slot <= find_first_active_bit(release_mask);
-                            slot_found  <= 1'b1;
-                        end
-                    end else begin
-                        if (match_mask != '0) begin
-                            target_slot <= find_first_active_bit(match_mask);
-                            slot_found  <= 1'b1;
-                        end
-                    end
-                    state <= APPLY_EVENT;
-                end
-                
-                APPLY_EVENT: begin
-                    if (slot_found) begin
-                        if (active_event.is_on_event) begin
-                            automatic instrument_meta_t init_meta = get_instrument_meta(active_event.instrument_id);
-                            
-                            voice_info[target_slot].pitch <= active_event.note_delta;
-                            voice_info[target_slot].inst <= active_event.instrument_id;
-                            voice_info[target_slot].pattern_id <= active_event.pattern_id;
-                            env_state[target_slot] <= ENV_ATTACK;
-                            env_level[target_slot] <= '0;
-                            phase_acc[target_slot] <= {init_meta.start_addr, 15'd0};
+                    // take items from FIFO
+                    READ_FIFO: begin
+                        if (!fifo_empty) begin
+                            active_event <= fifo_dout; // we store fifo value
+                            state <= GENERATE_MASKS;
+                            fifo_rd_en <= 1'b1; // we remove the item we just obtained (since we are with FWFT)
                         end else begin
-                            env_state[target_slot] <= ENV_RELEASE;
+    //                        scan_idx <= '0;
+                            scan_idx_state <= '0;
+                            scan_idx_level <= '0;
+                            scan_idx_phase <= '0;
+                            scan_idx_info  <= '0;
+                            mixer_sum <= '0; 
+                            state <= EVAL_VOICE;
                         end
                     end
                     
-                    state <= READ_FIFO; // read next
-                end
-
-                // tdm math
-                EVAL_VOICE: begin
-                    if (scan_idx_state == NUM_VOICES) begin // Master Mixing and Normalization
-                        logic signed [39:0] normalized;
-//                        normalized = mixer_sum >>> 4; // Divide by 16 for headroom
-                        normalized = mixer_sum;
-
+                    GENERATE_MASKS: begin
+                        // simple comparisons in parallel
+                        for(int i = 0; i < NUM_VOICES; i++) begin
+                            empty_mask[i] <= (env_state[i] == ENV_OFF);
+                            release_mask[i] <= (env_state[i] == ENV_RELEASE);
+                            match_mask[i] <= (env_state[i] != ENV_OFF) && (env_state[i] != ENV_RELEASE) &&
+                                               (voice_info[i].pitch == active_event.note_delta) &&
+                                               (voice_info[i].inst == active_event.instrument_id) &&
+                                               (voice_info[i].pattern_id == active_event.pattern_id);
+                        end
+                        state <= DECODE_SLOT;
+                    end
+                    
+                    DECODE_SLOT: begin
+                        slot_found  <= 1'b0; // Default
                         
-                        if (normalized > 40'sh7FFFFF) 
-                            audio_out <= 24'sh7FFFFF; //max pos int 24
-                        else if (normalized < -40'sh800000) 
-                            audio_out <= -24'sh800000; //max neg int 24
-                        else 
-                            audio_out <= normalized[23:0];
+                        if (active_event.is_on_event) begin
+                            if (empty_mask != '0) begin
+                                target_slot <= find_first_active_bit(empty_mask);
+                                slot_found  <= 1'b1;
+                            end else if (release_mask != '0) begin
+                                target_slot <= find_first_active_bit(release_mask);
+                                slot_found  <= 1'b1;
+                            end
+                        end else begin
+                            if (match_mask != '0) begin
+                                target_slot <= find_first_active_bit(match_mask);
+                                slot_found  <= 1'b1;
+                            end
+                        end
+                        state <= APPLY_EVENT;
+                    end
+                    
+                    APPLY_EVENT: begin
+                        if (slot_found) begin
+                            if (active_event.is_on_event) begin
+                                automatic instrument_meta_t init_meta = get_instrument_meta(active_event.instrument_id);
+                                
+                                voice_info[target_slot].pitch <= active_event.note_delta;
+                                voice_info[target_slot].inst <= active_event.instrument_id;
+                                voice_info[target_slot].pattern_id <= active_event.pattern_id;
+                                env_state[target_slot] <= ENV_ATTACK;
+                                env_level[target_slot] <= '0;
+                                phase_acc[target_slot] <= {init_meta.start_addr, 15'd0};
+                            end else begin
+                                env_state[target_slot] <= ENV_RELEASE;
+                            end
+                        end
                         
-                        audio_out_valid <= 1'b1;
-                        state <= IDLE;
-                    end else if (env_state[scan_idx_state] != ENV_OFF) begin 
-                        rom_addr <= phase_acc[scan_idx_phase][38:15]; // 24 bits from Q24.15
-                        state    <= WAIT_ROM;
-                    end else begin
+                        state <= READ_FIFO; // read next
+                    end
+    
+                    // tdm math
+                    EVAL_VOICE: begin
+                        if (scan_idx_state == NUM_VOICES) begin // Master Mixing and Normalization
+                            logic signed [39:0] normalized;
+    //                        normalized = mixer_sum >>> 4; // Divide by 16 for headroom
+                            normalized = mixer_sum;
+    
+                            
+                            if (normalized > 40'sh7FFFFF) 
+                                audio_out <= 24'sh7FFFFF; //max pos int 24
+                            else if (normalized < -40'sh800000) 
+                                audio_out <= -24'sh800000; //max neg int 24
+                            else 
+                                audio_out <= normalized[23:0];
+                            
+                            audio_out_valid <= 1'b1;
+                            state <= IDLE;
+                        end else if (env_state[scan_idx_state] != ENV_OFF) begin 
+                            rom_addr <= phase_acc[scan_idx_phase][38:15]; // 24 bits from Q24.15
+                            state    <= WAIT_ROM;
+                        end else begin
+                            scan_idx_state <= scan_idx_state + 1'b1;
+                            scan_idx_level <= scan_idx_level + 1'b1;
+                            scan_idx_phase <= scan_idx_phase + 1'b1;
+                            scan_idx_info  <= scan_idx_info + 1'b1;
+                        end
+                    end
+    
+                    WAIT_ROM: begin
+                        active_meta_reg <= get_instrument_meta(voice_info[scan_idx_info].inst);
+                        active_step_reg <= midi_to_pitch_step(voice_info[scan_idx_info].pitch);
+                        active_vol_reg  <= env_level[scan_idx_level];
+                        active_phase_reg <= phase_acc[scan_idx_phase];
+                        
+                        state <= CALCULATE_ADSR;
+                    end
+    
+                    CALCULATE_ADSR: begin
+                        automatic logic [15:0] temp_vol = active_vol_reg;
+    
+                        // ADSR Math
+                        case (env_state[scan_idx_state])
+                            ENV_ATTACK: begin
+                                if (temp_vol >= 16'd65535 - active_meta_reg.attack_rate) begin
+                                    temp_vol = 16'd65535;
+                                    env_state[scan_idx_state] <= ENV_DECAY;
+    //                                active_env_state_reg <= ENV_DECAY; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
+                                end else begin
+                                    temp_vol = temp_vol + active_meta_reg.attack_rate;
+                                end
+                            end
+                            
+                            ENV_DECAY: begin
+                                if (temp_vol <= active_meta_reg.sustain_level + active_meta_reg.decay_rate) begin
+                                    temp_vol = active_meta_reg.sustain_level;
+                                    env_state[scan_idx_state] <= ENV_SUSTAIN;
+    //                                active_env_state_reg <= ENV_SUSTAIN;
+                                end else begin
+                                    temp_vol = temp_vol - active_meta_reg.decay_rate;
+                                end
+                            end
+                            
+                            ENV_SUSTAIN: begin end
+                            
+                            ENV_RELEASE: begin
+                                if (temp_vol <= active_meta_reg.release_rate) begin
+                                    temp_vol = '0;
+                                    env_state[scan_idx_state] <= ENV_OFF;
+    //                                active_env_state_reg <= ENV_OFF;
+                                end else begin
+                                    temp_vol = temp_vol - active_meta_reg.release_rate;
+                                end
+                            end
+                        endcase
+                        
+                        dsp_rom_reg <= rom_rdata;
+                        dsp_vol_reg <= temp_vol;
+         
+                        // Pre-calculate the next phase position
+                        next_phase_reg <= active_phase_reg + active_step_reg; // the sum will affect the fractional bits
+    
+                        state <= MULTIPLY_DSP;
+                    end
+                    
+                    MULTIPLY_DSP: begin
+    
+                        dsp_mult_reg <= dsp_rom_reg * $signed({1'b0, dsp_vol_reg});
+    
+                        env_level[scan_idx_level] <= dsp_vol_reg; // to reduce fanout we update it here even though we could've done it earlier
+    //                    env_state[scan_idx_state] <= active_env_state_reg; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
+                        state <= SUM_VOICE;
+                    end
+    
+                    SUM_VOICE: begin
+                        mixer_sum <= mixer_sum + (dsp_mult_reg >>> 16); // shiftr data from previous stage
+    
+                        if (next_phase_reg[38:15] >= active_meta_reg.end_addr) begin
+                            if (active_meta_reg.mode == NATURAL) 
+                                env_state[scan_idx_state] <= ENV_OFF; 
+                            else
+                                phase_acc[scan_idx_phase] <= {active_meta_reg.loop_start, 15'd0}; 
+                                
+                        end else begin
+                            phase_acc[scan_idx_phase] <= next_phase_reg; 
+                        end
+    
                         scan_idx_state <= scan_idx_state + 1'b1;
                         scan_idx_level <= scan_idx_level + 1'b1;
                         scan_idx_phase <= scan_idx_phase + 1'b1;
                         scan_idx_info  <= scan_idx_info + 1'b1;
+                        state <= EVAL_VOICE;
                     end
-                end
-
-                WAIT_ROM: begin
-                    active_meta_reg <= get_instrument_meta(voice_info[scan_idx_info].inst);
-                    active_step_reg <= midi_to_pitch_step(voice_info[scan_idx_info].pitch);
-                    active_vol_reg  <= env_level[scan_idx_level];
-                    active_phase_reg <= phase_acc[scan_idx_phase];
-                    
-                    state <= CALCULATE_ADSR;
-                end
-
-                CALCULATE_ADSR: begin
-                    automatic logic [15:0] temp_vol = active_vol_reg;
-
-                    // ADSR Math
-                    case (env_state[scan_idx_state])
-                        ENV_ATTACK: begin
-                            if (temp_vol >= 16'd65535 - active_meta_reg.attack_rate) begin
-                                temp_vol = 16'd65535;
-                                env_state[scan_idx_state] <= ENV_DECAY;
-//                                active_env_state_reg <= ENV_DECAY; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
-                            end else begin
-                                temp_vol = temp_vol + active_meta_reg.attack_rate;
-                            end
-                        end
-                        
-                        ENV_DECAY: begin
-                            if (temp_vol <= active_meta_reg.sustain_level + active_meta_reg.decay_rate) begin
-                                temp_vol = active_meta_reg.sustain_level;
-                                env_state[scan_idx_state] <= ENV_SUSTAIN;
-//                                active_env_state_reg <= ENV_SUSTAIN;
-                            end else begin
-                                temp_vol = temp_vol - active_meta_reg.decay_rate;
-                            end
-                        end
-                        
-                        ENV_SUSTAIN: begin end
-                        
-                        ENV_RELEASE: begin
-                            if (temp_vol <= active_meta_reg.release_rate) begin
-                                temp_vol = '0;
-                                env_state[scan_idx_state] <= ENV_OFF;
-//                                active_env_state_reg <= ENV_OFF;
-                            end else begin
-                                temp_vol = temp_vol - active_meta_reg.release_rate;
-                            end
-                        end
-                    endcase
-                    
-                    dsp_rom_reg <= rom_rdata;
-                    dsp_vol_reg <= temp_vol;
-     
-                    // Pre-calculate the next phase position
-                    next_phase_reg <= active_phase_reg + active_step_reg; // the sum will affect the fractional bits
-
-                    state <= MULTIPLY_DSP;
-                end
-                
-                MULTIPLY_DSP: begin
-
-                    dsp_mult_reg <= dsp_rom_reg * $signed({1'b0, dsp_vol_reg});
-
-                    env_level[scan_idx_level] <= dsp_vol_reg; // to reduce fanout we update it here even though we could've done it earlier
-//                    env_state[scan_idx_state] <= active_env_state_reg; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
-                    state <= SUM_VOICE;
-                end
-
-                SUM_VOICE: begin
-                    mixer_sum <= mixer_sum + (dsp_mult_reg >>> 16); // shiftr data from previous stage
-
-                    if (next_phase_reg[38:15] >= active_meta_reg.end_addr) begin
-                        if (active_meta_reg.mode == NATURAL) 
-                            env_state[scan_idx_state] <= ENV_OFF; 
-                        else
-                            phase_acc[scan_idx_phase] <= {active_meta_reg.loop_start, 15'd0}; 
-                            
-                    end else begin
-                        phase_acc[scan_idx_phase] <= next_phase_reg; 
-                    end
-
-                    scan_idx_state <= scan_idx_state + 1'b1;
-                    scan_idx_level <= scan_idx_level + 1'b1;
-                    scan_idx_phase <= scan_idx_phase + 1'b1;
-                    scan_idx_info  <= scan_idx_info + 1'b1;
-                    state <= EVAL_VOICE;
-                end
-            endcase
+                endcase
+            end
         end
     end
 endmodule

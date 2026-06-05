@@ -12,10 +12,7 @@ module tamanduaBand (
     output logic        sdata,
     output logic        hSync,
     output logic        vSync,
-    output logic [11:0] RGB,
-    
-    //test
-    output logic [2:0] led
+    output logic [11:0] RGB
 );
 
     localparam int FREQ_KHZ = 100_000;
@@ -109,6 +106,10 @@ module tamanduaBand (
         .step_forward_pulse(step_forward_pulse),
         .step_backward_pulse(step_backward_pulse),
         .mute_mask(mute_mask),
+        
+        .pause_pulse,
+        .play_pulse,
+        
         .current_playback_step(current_playback_step),
         
         // handshake interface to BRAM
@@ -196,6 +197,8 @@ module tamanduaBand (
         .clk(clk),
         .rst(rstSync),
 
+        .pause_pulse,
+
         .live_valid(live_valid),
         .live_event(live_event),
         
@@ -221,10 +224,6 @@ module tamanduaBand (
     
     logic signed [23:0] sample;
     logic audio_out_valid; 
-    
-    assign led[0] = audio_out_valid;
-    assign led[1] = |sample;
-    assign led[2] = |rom_rdata;
 
     dspAudioEngine audioEngine (
         .clk(clk),
@@ -232,6 +231,8 @@ module tamanduaBand (
 
         .tick_48khz, 
         
+        .pause_pulse,
+
         .fifo_empty(fifo_empty),
         .fifo_dout(fifo_dout),
         .fifo_rd_en(fifo_rd_en),

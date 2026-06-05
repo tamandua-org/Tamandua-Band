@@ -4,6 +4,8 @@ module noteQueueManager (
     input  logic        clk,
     input  logic        rst,
     
+    input logic pause_pulse,
+    
     // live stream (from dawController)
     input  logic        live_valid,
     input  note_event_t live_event,
@@ -27,7 +29,7 @@ module noteQueueManager (
     note_event_t pending_live_event;
 
     always_ff @(posedge clk) begin
-        if (rst) begin
+        if (rst | pause_pulse) begin
             fifo_wr_en         <= 1'b0;
             fifo_din           <= '0;
             pending_live_valid <= 1'b0;
@@ -64,9 +66,9 @@ module noteQueueManager (
     end
     
     // fifo is in fwft
-    voiceAllocatorFIFO allocatorQueue ( // for now we are using DRAM, change?
+    voiceAllocatorFIFO allocatorQueue (
         .clk   (clk),
-        .srst  (rst),
+        .srst  (rst | pause_pulse),
         .din   (fifo_din),
         .wr_en (fifo_wr_en),
         .rd_en (fifo_rd_en),

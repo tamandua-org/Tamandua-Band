@@ -26,6 +26,9 @@ module patternEngine (
     input  logic step_forward_pulse,
     input  logic step_backward_pulse,
     input  logic [NUM_PATTERNS-1:0]     mute_mask,
+    
+    input logic pause_pulse,
+    input logic play_pulse,
 
     output logic [5:0]                  current_playback_step, // Current playback position (for UI and RAM writer)
 
@@ -82,6 +85,8 @@ module patternEngine (
     pattern_col_t               curr_col;
     pattern_col_t               prev_col;
     instrument_t                scan_instrument;
+    
+    logic                       force_retrigger;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -95,118 +100,128 @@ module patternEngine (
             seq_event  <= '0;
             ram_req        <= 1'b0;
             ram_addr       <= '0;
+            force_retrigger <= 1'b0;
         end else begin
-            seq_valid  <= 1'b0;
-            seq_event  <= '0;
-            ram_req        <= 1'b0;
-
-            case (state)
-                IDLE: begin
-                    if (is_playing && semiquaver_tick) begin
-                        scan_pattern <= '0;
-                        state        <= EVAL_MUTE;
-                    end
-                end
-
-                EVAL_MUTE: begin
-                    if (scan_pattern >= NUM_PATTERNS) begin
-                        state <= IDLE;
-                    end else if (mute_mask[scan_pattern]) begin // check next pattern
-                        scan_pattern <= scan_pattern + 1'b1;
-                    end else begin // we need to check this pattern's notes (later we'll come back to this state to check the remaining)
-                        state <= REQ_CURR;
-                    end
-                end
-
-                REQ_CURR: begin
-                    ram_req  <= 1'b1;
-                    ram_addr <= {scan_pattern, current_playback_step};
-                    state    <= REQ_PREV;
-                end
-
-                REQ_PREV: begin
-                    ram_req  <= 1'b1; // Back-to-back request
-                    ram_addr <= {scan_pattern, target_prev_step};
-                    state    <= WAIT_CURR_DATA;
-                end
-
-                WAIT_CURR_DATA: begin
-                    // Wait for "handshake"
-                    if (ram_valid) begin
-                        curr_col <= ram_rdata;
-                        state    <= WAIT_PREV_DATA;
-                    end
-                end
-                
-                WAIT_PREV_DATA: begin
-                    // Wait for "handshake"
-                    if (ram_valid) begin
-                        prev_col        <= ram_rdata;                      
-                        scan_instrument <= instrument_regs[scan_pattern];  
-                        scan_note       <= '0;
-                        state           <= SCAN_NOTE_ON;
-                    end
-                end
- 
-                SCAN_NOTE_ON: begin
-                    if (scan_note == MAX_NOTES) begin
-                        scan_note <= '0;
-                        state     <= SCAN_NOTE_OFF;
-                    end else begin
-                        // Check if curr_col.notes[scan_note] is a new note (active in curr but not found anywhere in prev)
-                        if (curr_col.notes[scan_note].active) begin
-                            logic found_in_prev;
-                            found_in_prev = 1'b0;
-                            for (int i = 0; i < MAX_NOTES; i++) begin
-                                if (prev_col.notes[i].active &&
-                                    prev_col.notes[i].note_delta == curr_col.notes[scan_note].note_delta)
-                                    found_in_prev = 1'b1;
-                            end
- 
-                            if (!found_in_prev) begin // send pulse of note
-                                seq_valid  <= 1'b1;
-                                seq_event.instrument_id <= scan_instrument;
-                                seq_event.note_delta <= curr_col.notes[scan_note].note_delta;
-                                seq_event.pattern_id <= scan_pattern;
-                                seq_event.is_on_event <= 1'b1;
-
-                            end
+            seq_valid <= 1'b0;
+            seq_event <= '0;
+            ram_req <= 1'b0;
+            
+            if (pause_pulse) begin
+                state <= IDLE;
+                force_retrigger <= 1'b0;
+            end else begin
+                case (state)
+                    IDLE: begin
+                        if ((is_playing && semiquaver_tick) || play_pulse) begin // if we receive a pulse we need to start before the semiquaver tick
+                            scan_pattern <= '0;
+                            state <= EVAL_MUTE;
+                            
+                            if (play_pulse)
+                                force_retrigger <= 1'b1;
                         end
- 
-                        scan_note <= scan_note + 1'b1;
                     end
-                end
- 
-                SCAN_NOTE_OFF: begin
-                    if (scan_note == MAX_NOTES) begin
-                        scan_pattern <= scan_pattern + 1'b1;
-                        state        <= EVAL_MUTE;
-                    end else begin
-                        // Check if prev_col.notes[scan_note] ended (active in prev but pitch not found anywhere in curr)
-                        if (prev_col.notes[scan_note].active) begin
-                            logic found_in_curr;
-                            found_in_curr = 1'b0;
-                            for (int i = 0; i < MAX_NOTES; i++) begin
-                                if (curr_col.notes[i].active &&
-                                    curr_col.notes[i].note_delta == prev_col.notes[scan_note].note_delta)
-                                    found_in_curr = 1'b1;
-                            end
- 
-                            if (!found_in_curr) begin
-                                seq_valid  <= 1'b1;
-                                seq_event.instrument_id <= scan_instrument;
-                                seq_event.note_delta <= prev_col.notes[scan_note].note_delta;
-                                seq_event.pattern_id <= scan_pattern;
-                                seq_event.is_on_event <= 1'b0;
-
-                            end
+    
+                    EVAL_MUTE: begin
+                        if (scan_pattern >= NUM_PATTERNS) begin
+                            state <= IDLE;
+                            force_retrigger <= 1'b0;
+                        end else if (mute_mask[scan_pattern]) begin // check next pattern
+                            scan_pattern <= scan_pattern + 1'b1;
+                        end else begin // we need to check this pattern's notes (later we'll come back to this state to check the remaining)
+                            state <= REQ_CURR;
+                            scan_instrument <= instrument_regs[scan_pattern];
+                            scan_note <= '0;
                         end
- 
-                        scan_note <= scan_note + 1'b1;
                     end
-                end
-
-            endcase
+    
+                    REQ_CURR: begin
+                        ram_req <= 1'b1;
+                        ram_addr <= {scan_pattern, current_playback_step};
+                        state <= REQ_PREV;
+                    end
+    
+                    REQ_PREV: begin
+                        ram_req <= 1'b1; // Back-to-back request
+                        ram_addr <= {scan_pattern, target_prev_step};
+                        state <= WAIT_CURR_DATA;
+                    end
+    
+                    WAIT_CURR_DATA: begin
+                        // Wait for "handshake"
+                        if (ram_valid) begin
+                            curr_col <= ram_rdata;
+                            state    <= WAIT_PREV_DATA;
+                        end
+                    end
+                    
+                    WAIT_PREV_DATA: begin
+                        // Wait for "handshake"
+                        if (ram_valid) begin
+                            prev_col <= force_retrigger ? '0 : ram_rdata;                      
+                            state <= SCAN_NOTE_ON;
+                        end
+                    end
+     
+                    SCAN_NOTE_ON: begin
+                        if (scan_note == MAX_NOTES) begin
+                            scan_note <= '0;
+                            state     <= SCAN_NOTE_OFF;
+                        end else begin
+                            // Check if curr_col.notes[scan_note] is a new note (active in curr but not found anywhere in prev)
+                            if (curr_col.notes[scan_note].active) begin
+                                logic found_in_prev;
+                                found_in_prev = 1'b0;
+                                for (int i = 0; i < MAX_NOTES; i++) begin
+                                    if (prev_col.notes[i].active &&
+                                        prev_col.notes[i].note_delta == curr_col.notes[scan_note].note_delta)
+                                        found_in_prev = 1'b1;
+                                end
+     
+                                if (!found_in_prev) begin // send pulse of note
+                                    seq_valid  <= 1'b1;
+                                    seq_event.instrument_id <= scan_instrument;
+                                    seq_event.note_delta <= curr_col.notes[scan_note].note_delta;
+                                    seq_event.pattern_id <= scan_pattern;
+                                    seq_event.is_on_event <= 1'b1;
+    
+                                end
+                            end
+     
+                            scan_note <= scan_note + 1'b1;
+                        end
+                    end
+     
+                    SCAN_NOTE_OFF: begin
+                        if (scan_note == MAX_NOTES) begin
+                            scan_pattern <= scan_pattern + 1'b1;
+                            state        <= EVAL_MUTE;
+                        end else begin
+                            // Check if prev_col.notes[scan_note] ended (active in prev but pitch not found anywhere in curr)
+                            if (prev_col.notes[scan_note].active) begin
+                                logic found_in_curr;
+                                found_in_curr = 1'b0;
+                                for (int i = 0; i < MAX_NOTES; i++) begin
+                                    if (curr_col.notes[i].active &&
+                                        curr_col.notes[i].note_delta == prev_col.notes[scan_note].note_delta)
+                                        found_in_curr = 1'b1;
+                                end
+     
+                                if (!found_in_curr) begin
+                                    seq_valid  <= 1'b1;
+                                    seq_event.instrument_id <= scan_instrument;
+                                    seq_event.note_delta <= prev_col.notes[scan_note].note_delta;
+                                    seq_event.pattern_id <= scan_pattern;
+                                    seq_event.is_on_event <= 1'b0;
+    
+                                end
+                            end
+     
+                            scan_note <= scan_note + 1'b1;
+                        end
+                    end
+    
+                endcase
+            end
         end
     end
 
