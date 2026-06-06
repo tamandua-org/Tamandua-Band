@@ -206,8 +206,8 @@ module dawController (
 
                                 // instrument selection 
                                 8'h0D: begin // tab
-                                    if (ui_active_instrument == GUITAR) 
-                                        instrument_regs[ui_active_pattern] <= PIANO;
+                                    if (ui_active_instrument == LAST_INSTRUMENT) 
+                                        instrument_regs[ui_active_pattern] <= FIRST_INSTRUMENT;
                                     else 
                                         instrument_regs[ui_active_pattern] <= instrument_t'(ui_active_instrument + 1'b1);
                                 end
@@ -235,13 +235,16 @@ module dawController (
 
                                 // allow configuration while waiting
                                 8'h0D: begin // tab
-                                    if (ui_active_instrument == GUITAR) // ONLY WORKS IF WE KEEP GUITAR AS LAST
-                                        instrument_regs[ui_active_pattern] <= PIANO;
+                                    if (ui_active_instrument == LAST_INSTRUMENT) 
+                                        instrument_regs[ui_active_pattern] <= FIRST_INSTRUMENT;
                                     else 
                                         instrument_regs[ui_active_pattern] <= instrument_t'(ui_active_instrument + 1'b1);
                                 end
                                 8'h41: if (current_octave > 0) current_octave <= current_octave - 1'b1; // ,
                                 8'h49: if (current_octave < 8) current_octave <= current_octave + 1'b1; // .
+                                
+                                8'h33: if (!is_playing) step_backward_pulse <= 1'b1; // H (step back)
+                                8'h4B: if (!is_playing) step_forward_pulse  <= 1'b1; // L (step forward)
                                 
                             endcase
                         end
@@ -250,8 +253,8 @@ module dawController (
                             case (active_scancode)
                                 8'h0D: begin // tab allowed only if live mode
                                     if (current_mode == MODE_LIVE) begin
-                                        if (ui_active_instrument == GUITAR) 
-                                            instrument_regs[ui_active_pattern] <= PIANO;
+                                        if (ui_active_instrument == LAST_INSTRUMENT) 
+                                            instrument_regs[ui_active_pattern] <= FIRST_INSTRUMENT;
                                         else 
                                             instrument_regs[ui_active_pattern] <= instrument_t'(ui_active_instrument + 1'b1);
                                     end

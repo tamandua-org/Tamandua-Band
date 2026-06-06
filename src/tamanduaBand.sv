@@ -211,12 +211,6 @@ module tamanduaBand (
         .fifo_empty
     );
     
-
-    
-    logic tick_48khz;
-    
-    edgeDetector #(.XPOL(1'b0)) lrclkDetector (.clk(clk), .x(lrclk), .xFall(tick_48khz), .xRise());
-    
     logic [23:0] rom_addr;
     logic [23:0] rom_rdata;
     
@@ -224,6 +218,9 @@ module tamanduaBand (
     
     logic signed [23:0] sample;
     logic audio_out_valid; 
+    logic tick_48khz;
+    
+    edgeDetector #(.XPOL(1'b0)) lrclkDetector (.clk(clk), .x(lrclk), .xFall(), .xRise(tick_48khz));
 
     dspAudioEngine audioEngine (
         .clk(clk),

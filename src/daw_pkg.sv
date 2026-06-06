@@ -24,8 +24,12 @@ package daw_pkg;
         HIHAT,
         TRUMPET,
         SYNTH,
+        BRASS,
         GUITAR
     } instrument_t;
+    
+    localparam instrument_t FIRST_INSTRUMENT = PIANO;
+    localparam instrument_t LAST_INSTRUMENT = GUITAR;
 
     // 0 to 127
     typedef logic [NOTE_DELTA_BITS-1:0] note_delta_t;
@@ -81,9 +85,13 @@ package daw_pkg;
     function automatic instrument_meta_t get_instrument_meta(input instrument_t inst);
         case (inst)
                     //     START      END        LOOP       MODE       A          D          S          R
-            SYNTH: return '{24'd0,     24'd183,   24'd0,     GATED,   16'd35,  16'd50,    16'd40000, 16'd40}; 
-            KICK:  return '{24'd1000,     24'd10000, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000}; 
-            SNARE: return '{24'd10000, 24'd25000, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000};
+//            SYNTH: return '{24'd0,     24'd182,   24'd0,     GATED,   16'd35,  16'd50,    16'd40000, 16'd40}; 
+//            BRASS: return '{24'd0,     24'd182,   24'd0,     GATED,   16'd13,  16'd2,    16'd45874, 16'd1}; 
+//            SNARE: return '{24'd183, 24'd12182, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000};
+            SYNTH: return '{24'd0, 24'd183, 24'd0, GATED,   16'd35,  16'd50, 16'd40000, 16'd40};
+            BRASS: return '{24'd184, 24'd367, 24'd184, GATED,   16'd13,  16'd2,  16'd45874, 16'd3};
+            SNARE: return '{24'd368, 24'd12367, 24'd0, NATURAL, 16'd65000, 16'd0, 16'd65535, 16'd65000};
+            KICK:  return '{24'd11607,     24'd10000, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000}; 
             PIANO: return '{24'd25000, 24'd80000, 24'd0,     GATED,   16'd5000,  16'd100,   16'd30000, 16'd500};   
               
             default: return '{24'd0, 24'd1000, 24'd0, NATURAL, 16'd65535, 16'd0, 16'd65535, 16'd65535};

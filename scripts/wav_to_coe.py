@@ -5,13 +5,21 @@ import sys
 def wav_to_coe(wav_filename, coe_filename):
     print(f"Reading {wav_filename}...")
     
-    # Read the WAV file (pip install scipy numpy)
+    # Read the WAV file
     sample_rate, data = wavfile.read(wav_filename)
     
     # If the audio is stereo, keep only the left channel
     if len(data.shape) > 1:
         data = data[:, 0]
         print("Converted stereo to mono.")
+        
+    # --- FIX 1: Prevent 8-bit unsigned DC offset noise ---
+    if data.dtype == np.uint8:
+        # 8-bit audio is 0 to 255. We must center it to -128 to 127
+        data = data.astype(np.float32) - 128.0
+    else:
+        # --- FIX 2: Convert to float early to prevent 16-bit np.abs() overflow ---
+        data = data.astype(np.float32)
         
     # 1. Normalize the audio to a float between -1.0 and 1.0
     max_val = np.max(np.abs(data))
@@ -27,23 +35,22 @@ def wav_to_coe(wav_filename, coe_filename):
     
     # 3. Write the Vivado .coe file
     print(f"Writing {len(scaled_data)} samples to {coe_filename}...")
+    print(f"--> Use 24'd{len(scaled_data)-1} as your end_addr in SystemVerilog!")
+    
     with open(coe_filename, "w") as f:
-        # The required Vivado Header
         f.write("memory_initialization_radix=16;\n")
         f.write("memory_initialization_vector=\n")
         
         for i, val in enumerate(scaled_data):
-            # Bitwise AND masks it to exactly 24 bits (handles negative Two's Complement cleanly)
             hex_str = f"{val & 0xFFFFFF:06x}"
             
-            # The last value must end with a semicolon, everything else gets a comma
             if i == len(scaled_data) - 1:
-                f.write(f"{hex_str};\n")
+                f.write(f"{hex_str};")
             else:
-                f.write(f"{hex_str},\n")
+                f.write(f"{hex_str}, ")
                 
     print("Done! Load this .coe file into your Vivado Block Memory Generator.")
 
-# --- RUN SCRIPT ---
-# Example: wav_to_coe("piano_C4.wav", "audio_rom.coe")
-wav_to_coe("your_audio_file.wav", "audio_rom.coe")
+# Run it
+# wav_to_coe("snare.wav", "audio_rom.coe")
+wav_to_coe("../samples/hip-hop-snare2.wav", "audio_rom.coe")

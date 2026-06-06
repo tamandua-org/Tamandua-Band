@@ -62,6 +62,16 @@ module dawDisplayInterface #(
     logic [6:0]                   visible_min_reg;
     logic [6:0]                   visible_max_reg;
     logic [4:0]                   selected_grid_row;
+    
+    instrument_t active_instrument_reg;
+    
+    always_ff @(posedge clk) begin
+        if (rst)
+            active_instrument_reg <= FIRST_INSTRUMENT;
+        else 
+            active_instrument_reg <= ui_active_instrument;
+     end
+    
 
     function automatic logic [6:0] compute_visible_min(input note_delta_t midi_note);
         begin
@@ -817,7 +827,7 @@ module dawDisplayInterface #(
                 if (char_idx < 14) begin
                     char_x0        = 420 + char_idx*12;
                     char_y0        = 408;
-                    ch             = instr_label_char(char_idx, ui_active_instrument);
+                    ch             = instr_label_char(char_idx, active_instrument_reg);
                     text_candidate = 1'b1;
                 end
             end

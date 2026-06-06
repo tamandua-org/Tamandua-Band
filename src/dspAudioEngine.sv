@@ -48,7 +48,7 @@ module dspAudioEngine (
         READ_FIFO,        // Stage 1
         GENERATE_MASKS,   // Stage 2
         DECODE_SLOT,      // Stage 3
-        APPLY_EVENT,      // Stage 4
+        ADD_EVENT,        // Stage 4
         EVAL_VOICE,
         WAIT_ROM,
         CALCULATE_ADSR,
@@ -59,8 +59,6 @@ module dspAudioEngine (
     state_t state;
     
 //    logic [$clog2(NUM_VOICES):0] scan_idx;
-    // Force Vivado to keep these registers separate. This should physically divide the fanout by 4
-    // (* equivalent_register_removal = "no" *) wanted to use this but i think it fails impl with it
     logic [$clog2(NUM_VOICES):0] scan_idx_state;
     logic [$clog2(NUM_VOICES):0] scan_idx_level;
     logic [$clog2(NUM_VOICES):0] scan_idx_phase;
@@ -128,8 +126,6 @@ module dspAudioEngine (
             
                 case (state)
                     IDLE: begin
-                    //todo add fix incorporar is playing para empezar, y que cuando se deje de tocar, se deje de hacer sonido
-                    // a lo mejor se puede hacer poniendo el is_playing como se�al para enviar el audio_out_valid
                         if (tick_48khz) state <= READ_FIFO; 
                     end
                     
@@ -180,21 +176,21 @@ module dspAudioEngine (
                                 slot_found  <= 1'b1;
                             end
                         end
-                        state <= APPLY_EVENT;
+                        state <= ADD_EVENT;
                     end
                     
-                    APPLY_EVENT: begin
+                    ADD_EVENT: begin
                         if (slot_found) begin
+                            automatic instrument_meta_t inst_meta = get_instrument_meta(active_event.instrument_id);
+                            
                             if (active_event.is_on_event) begin
-                                automatic instrument_meta_t init_meta = get_instrument_meta(active_event.instrument_id);
-                                
                                 voice_info[target_slot].pitch <= active_event.note_delta;
                                 voice_info[target_slot].inst <= active_event.instrument_id;
                                 voice_info[target_slot].pattern_id <= active_event.pattern_id;
                                 env_state[target_slot] <= ENV_ATTACK;
                                 env_level[target_slot] <= '0;
-                                phase_acc[target_slot] <= {init_meta.start_addr, 15'd0};
-                            end else begin
+                                phase_acc[target_slot] <= {inst_meta.start_addr, 15'd0};
+                            end else if (inst_meta.mode != NATURAL) begin // non natural (one shots) ending will only go into release with note off
                                 env_state[target_slot] <= ENV_RELEASE;
                             end
                         end
@@ -206,8 +202,8 @@ module dspAudioEngine (
                     EVAL_VOICE: begin
                         if (scan_idx_state == NUM_VOICES) begin // Master Mixing and Normalization
                             logic signed [39:0] normalized;
-    //                        normalized = mixer_sum >>> 4; // Divide by 16 for headroom
-                            normalized = mixer_sum;
+                            normalized = mixer_sum >>> 2; // Divide by 4 for headroom
+//                            normalized = mixer_sum;
     
                             
                             if (normalized > 40'sh7FFFFF) 
@@ -235,6 +231,7 @@ module dspAudioEngine (
                         active_step_reg <= midi_to_pitch_step(voice_info[scan_idx_info].pitch);
                         active_vol_reg  <= env_level[scan_idx_level];
                         active_phase_reg <= phase_acc[scan_idx_phase];
+                        active_env_state_reg <= env_state[scan_idx_state];
                         
                         state <= CALCULATE_ADSR;
                     end
@@ -243,37 +240,40 @@ module dspAudioEngine (
                         automatic logic [15:0] temp_vol = active_vol_reg;
     
                         // ADSR Math
-                        case (env_state[scan_idx_state])
+                        case (active_env_state_reg) // env_state[scan_idx_state]
                             ENV_ATTACK: begin
                                 if (temp_vol >= 16'd65535 - active_meta_reg.attack_rate) begin
                                     temp_vol = 16'd65535;
-                                    env_state[scan_idx_state] <= ENV_DECAY;
-    //                                active_env_state_reg <= ENV_DECAY; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
+//                                    env_state[scan_idx_state] <= ENV_DECAY;
+                                    active_env_state_reg <= ENV_DECAY;
                                 end else begin
                                     temp_vol = temp_vol + active_meta_reg.attack_rate;
                                 end
                             end
                             
                             ENV_DECAY: begin
-                                if (temp_vol <= active_meta_reg.sustain_level + active_meta_reg.decay_rate) begin
+                                automatic logic [15:0] exp_drop = (temp_vol >>> 10) + active_meta_reg.decay_rate;
+    
+                                if (temp_vol <= active_meta_reg.sustain_level + exp_drop) begin
                                     temp_vol = active_meta_reg.sustain_level;
-                                    env_state[scan_idx_state] <= ENV_SUSTAIN;
-    //                                active_env_state_reg <= ENV_SUSTAIN;
+//                                    env_state[scan_idx_state] <= ENV_SUSTAIN;
+                                    active_env_state_reg <= ENV_SUSTAIN;
                                 end else begin
-                                    temp_vol = temp_vol - active_meta_reg.decay_rate;
+                                    temp_vol = temp_vol - exp_drop;
                                 end
                             end
                             
                             ENV_SUSTAIN: begin end
                             
                             ENV_RELEASE: begin
-                                if (temp_vol <= active_meta_reg.release_rate) begin
+                                automatic logic [15:0] exp_drop = (temp_vol >>> 10) + active_meta_reg.release_rate;
+    
+                                if (temp_vol <= exp_drop) begin
                                     temp_vol = '0;
-                                    env_state[scan_idx_state] <= ENV_OFF;
-    //                                active_env_state_reg <= ENV_OFF;
+                                    active_env_state_reg <= ENV_OFF;
                                 end else begin
-                                    temp_vol = temp_vol - active_meta_reg.release_rate;
-                                end
+                                    temp_vol = temp_vol - exp_drop;
+                                end  
                             end
                         endcase
                         
@@ -291,12 +291,12 @@ module dspAudioEngine (
                         dsp_mult_reg <= dsp_rom_reg * $signed({1'b0, dsp_vol_reg});
     
                         env_level[scan_idx_level] <= dsp_vol_reg; // to reduce fanout we update it here even though we could've done it earlier
-    //                    env_state[scan_idx_state] <= active_env_state_reg; // if i add these, then we once again fall into negative slack due to instrument_regs, probably due to placement
+                        env_state[scan_idx_state] <= active_env_state_reg;
                         state <= SUM_VOICE;
                     end
     
                     SUM_VOICE: begin
-                        mixer_sum <= mixer_sum + (dsp_mult_reg >>> 16); // shiftr data from previous stage
+                        mixer_sum <= mixer_sum + ((dsp_mult_reg + 40'sh8000) >>> 16); // shiftr data from previous stage
     
                         if (next_phase_reg[38:15] >= active_meta_reg.end_addr) begin
                             if (active_meta_reg.mode == NATURAL) 

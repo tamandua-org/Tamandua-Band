@@ -29,7 +29,6 @@ module i2s_transmitter (
     logic sclkFall;
     edgeDetector #(.XPOL(0)) sclkEdgeDetector (.clk(mclk), .x(sclk), .xFall(sclkFall), .xRise());
 
-
     //  pending sample written from clk100mhz
     logic [23:0] pending_sample;
     logic        pending_valid;
@@ -49,8 +48,6 @@ module i2s_transmitter (
         end
     end
 
-
-    //  Shift register under mclk domain
     logic [23:0] current_sample;
     logic [31:0] shift_reg;
     logic [5:0]  bit_cnt;
@@ -65,25 +62,24 @@ module i2s_transmitter (
             sample_ack     <= 1'b0;
         end
         else begin
-            sample_ack <= 1'b0;  // pulso de un ciclo por defecto
+            sample_ack <= 1'b0;
 
             if (sclkFall) begin
+                if (bit_cnt == 6'd0)       lrclk <= 1'b0; // left
+                else if (bit_cnt == 6'd32) lrclk <= 1'b1; // right
 
-                if (bit_cnt == 6'd0) begin
+                if (bit_cnt == 6'd0 || bit_cnt == 6'd32) begin
+                    // If fresh data is waiting, grab it and send an ACK (general, but it our case, we'll update only on bitcnt = 0)
                     if (pending_valid) begin
                         current_sample <= pending_sample;
-                        sample_ack     <= 1'b1;  // avisar al dominio clk100mhz
+                        sample_ack     <= 1'b1; // avisar al dominio clk100mhz
                     end
-                    lrclk <= 1'b0;
-                end
-
-                if (bit_cnt == 6'd32)
-                    lrclk <= 1'b1;
-
-                if (bit_cnt == 6'd0 || bit_cnt == 6'd32)
+                    // Load the shift register. I2S requires a 1-bit delay, we also add padding just in case idk
                     shift_reg <= { 1'b0, current_sample, 7'h00 };
+                end 
                 else begin
-                    sdata     <= shift_reg[31];
+                    // Shift out the data
+                    sdata <= shift_reg[31];
                     shift_reg <= { shift_reg[30:0], 1'b0 };
                 end
 
@@ -91,5 +87,4 @@ module i2s_transmitter (
             end
         end
     end
-
 endmodule
