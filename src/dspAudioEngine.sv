@@ -7,6 +7,7 @@ module dspAudioEngine (
     input  logic tick_48khz, 
     
     input logic pause_pulse,
+    input logic [2:0] master_gain_shift,
     
     // fifo ins
     input  logic        fifo_empty,
@@ -201,20 +202,12 @@ module dspAudioEngine (
                     // tdm math
                     EVAL_VOICE: begin
                         if (scan_idx_state == NUM_VOICES) begin // Master Mixing and Normalization
-                            logic signed [39:0] normalized;
-//                            normalized = mixer_sum >>> 6; // Divide for headroom
-                
-//                            if (normalized > 40'sh7FFFFF) 
-//                                audio_out <= 24'sh7FFFFF; //max pos int 24
-//                            else if (normalized < -40'sh800000) 
-//                                audio_out <= -24'sh800000; //max neg int 24
-//                            else 
-//                                audio_out <= normalized[23:0];
-                            automatic logic signed [39:0] max_pos = 40'sd8388607;
-                            automatic logic signed [39:0] min_neg = -40'sd8388608;
-                            
-                            normalized = mixer_sum;
+                            logic signed [47:0] normalized;
+                            automatic logic signed [47:0] max_pos = 48'sd8388607;
+                            automatic logic signed [47:0] min_neg = -48'sd8388608;
 
+                            // Apply master boost after all voices are mixed. (0 = x1, 1 = x2) we need to account for dB that work with log
+                            normalized = ({{8{mixer_sum[39]}}, mixer_sum}) <<< master_gain_shift;
                             
                             if (normalized > max_pos) 
                                 audio_out <= 24'h7FFFFF; 

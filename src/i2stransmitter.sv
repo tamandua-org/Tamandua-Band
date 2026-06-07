@@ -11,42 +11,73 @@ module i2s_transmitter (
     output logic        sdata
 );
 
-    transmitterClk mclkPll (.mclk, .clk100mhz);
+     // ------------------------------------------------------------------
+    // Master clock PLL / clock wizard
+    // ------------------------------------------------------------------
+    transmitterClk mclkPll (
+        .mclk      (mclk),
+        .clk100mhz (clk100mhz)
+    );
 
-    //  SCLK divides mclk by 4
-    logic [1:0] sclk_div;
-    always_ff @(posedge mclk) begin
-        if (rst) begin
-            sclk_div <= 0;
-            sclk     <= 0;
-        end else begin
-            sclk_div <= sclk_div + 1'b1;
-            if (sclk_div == 2'd1)
-                sclk <= ~sclk;
-        end
-    end
+    // ------------------------------------------------------------------
+    // CDC with Vivado FIFO Generator IP
+    // ------------------------------------------------------------------
+    // Create this IP from Vivado IP Catalog with this component/module name:
+    //
+    //     audio_sample_fifo
+    //
+    // Recommended settings:
+    //   Interface Type      : Native
+    //   FIFO Implementation : Independent Clocks Block RAM
+    //   Write Clock         : clk100mhz
+    //   Read Clock          : mclk
+    //   Write Width         : 24
+    //   Read Width          : 24
+    //   Write Depth         : 16 or 32
+    //   Read Mode           : First Word Fall Through
+    //   Reset Type          : Asynchronous reset
+    //   Optional ports      : enable wr_rst_busy and rd_rst_busy
+    //
+    // Why FWFT:
+    //   In First Word Fall Through mode, when empty == 0, fifo_dout already
+    //   contains the next valid sample. Therefore, the I2S side can latch
+    //   fifo_dout directly at bit_cnt == 0 and pulse rd_en to consume it.
+    // ------------------------------------------------------------------
 
-    logic sclkFall;
-    edgeDetector #(.XPOL(0)) sclkEdgeDetector (.clk(mclk), .x(sclk), .xFall(sclkFall), .xRise());
+    logic [23:0] fifo_dout;
+    logic        fifo_full;
+    logic        fifo_empty;
+    logic        fifo_wr_en;
+    logic        fifo_rd_en;
+    logic        fifo_wr_rst_busy;
+    logic        fifo_rd_rst_busy;
 
-    //  pending sample written from clk100mhz
-    logic [23:0] pending_sample;
-    logic        pending_valid;
-    logic        sample_ack;     // ack to tell clk100mhz we've taken the sample
+    // One write per ready pulse. If the FIFO is full, the sample is dropped.
+    // In the normal design ready should pulse once per audio frame, so the
+    // FIFO should not fill unless the producer is running too fast.
+    assign fifo_wr_en = ready && !fifo_full && !fifo_wr_rst_busy;
 
-    always_ff @(posedge clk100mhz) begin
-        if (rst) begin
-            pending_sample <= 24'd0;
-            pending_valid  <= 1'b0;
-        end else begin
-            if (ready) begin
-                pending_sample <= sample;
-                pending_valid  <= 1'b1;
-            end else if (sample_ack) begin
-                pending_valid  <= 1'b0;  // unico sitio donde se baja
-            end
-        end
-    end
+    cdcTransmitterFIFO cdcFifo (
+        .rst         (rst),
+
+        .wr_clk      (clk100mhz),
+        .rd_clk      (mclk),
+
+        .din         (sample),
+        .wr_en       (fifo_wr_en),
+        .rd_en       (fifo_rd_en),
+        .dout        (fifo_dout),
+
+        .full        (fifo_full),
+        .empty       (fifo_empty),
+
+        .wr_rst_busy (fifo_wr_rst_busy),
+        .rd_rst_busy (fifo_rd_rst_busy)
+    );
+
+
+
+    logic [1:0] sclk_cnt;
 
     logic [23:0] current_sample;
     logic [31:0] shift_reg;
@@ -54,37 +85,92 @@ module i2s_transmitter (
 
     always_ff @(posedge mclk) begin
         if (rst) begin
-            bit_cnt        <= '0;
-            shift_reg      <= '0;
+            sclk           <= 1'b0;
+            sclk_cnt       <= '0;
+
+            bit_cnt        <= 6'd0;
             lrclk          <= 1'b0;
             sdata          <= 1'b0;
+            shift_reg      <= 32'd0;
             current_sample <= 24'd0;
-            sample_ack     <= 1'b0;
+            fifo_rd_en     <= 1'b0;
         end
         else begin
-            sample_ack <= 1'b0;
+            // FIFO read enable must be a one-mclk-cycle pulse.
+            fifo_rd_en <= 1'b0;
 
-            if (sclkFall) begin
-                if (bit_cnt == 6'd0)       lrclk <= 1'b0; // left
-                else if (bit_cnt == 6'd32) lrclk <= 1'b1; // right
+            // ----------------------------------------------------------
+            // Generate SCLK from MCLK.
+            // Data changes when SCLK is falling, so the DAC can sample it
+            // on the rising edge.
+            // ----------------------------------------------------------
+            if (sclk_cnt == 1) begin
+                sclk_cnt <= '0;
+                sclk     <= ~sclk;
 
-                if (bit_cnt == 6'd0 || bit_cnt == 6'd32) begin
-                    // If fresh data is waiting, grab it and send an ACK (general, but it our case, we'll update only on bitcnt = 0)
-                    if (pending_valid) begin
-                        current_sample <= pending_sample;
-                        sample_ack     <= 1'b1; // avisar al dominio clk100mhz
+                // Old sclk == 1 means this mclk edge creates an SCLK fall.
+                if (sclk == 1'b1) begin
+
+                    // --------------------------------------------------
+                    // bit_cnt == 0: start of left channel / stereo frame.
+                    //
+                    // Read exactly one new sample from the FIFO here.
+                    // Do not read another sample at bit_cnt == 32, because
+                    // that would make left and right channels use different
+                    // samples and double the effective consumption rate.
+                    //
+                    // I2S needs a one-SCLK delay after LRCLK changes.
+                    // Therefore we load the shift register here and keep
+                    // SDATA at 0. The MSB is transmitted at bit_cnt == 1.
+                    //
+                    // Important: do NOT prepend 1'b0 to the sample. The
+                    // delay is made by this idle bit, not by shifting the
+                    // sample itself. Prepending 0 corrupts signed samples.
+                    // --------------------------------------------------
+                    if (bit_cnt == 6'd0) begin
+                        lrclk <= 1'b0; // left channel
+                        sdata <= 1'b0; // I2S one-bit delay
+
+                        if (!fifo_empty && !fifo_rd_rst_busy) begin
+                            current_sample <= fifo_dout;
+                            shift_reg      <= {fifo_dout, 8'h00};
+                            fifo_rd_en     <= 1'b1;
+                        end
+                        else begin
+                            // If no new sample is available, repeat the
+                            // previous one instead of outputting a click.
+                            shift_reg <= {current_sample, 8'h00};
+                        end
                     end
-                    // Load the shift register. I2S requires a 1-bit delay, we also add padding just in case idk
-                    shift_reg <= { 1'b0, current_sample, 7'h00 };
-                end 
-                else begin
-                    // Shift out the data
-                    sdata <= shift_reg[31];
-                    shift_reg <= { shift_reg[30:0], 1'b0 };
-                end
 
-                bit_cnt <= bit_cnt + 1'b1;
+                    // --------------------------------------------------
+                    // bit_cnt == 32: start of right channel.
+                    // Send the same sample again, so mono audio appears on
+                    // both left and right outputs.
+                    // --------------------------------------------------
+                    else if (bit_cnt == 6'd32) begin
+                        lrclk     <= 1'b1; // right channel
+                        sdata     <= 1'b0; // I2S one-bit delay
+                        shift_reg <= {current_sample, 8'h00};
+                    end
+
+                    // --------------------------------------------------
+                    // bit_cnt 1..31 and 33..63: transmit MSB first.
+                    // For a 24-bit sample in a 32-bit slot, the 7 remaining
+                    // transmitted bits after sample[0] are zero padding.
+                    // --------------------------------------------------
+                    else begin
+                        sdata     <= shift_reg[31];
+                        shift_reg <= {shift_reg[30:0], 1'b0};
+                    end
+
+                    bit_cnt <= bit_cnt + 1'b1;
+                end
+            end
+            else begin
+                sclk_cnt <= sclk_cnt + 1'b1;
             end
         end
     end
+
 endmodule

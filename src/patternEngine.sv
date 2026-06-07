@@ -1,19 +1,3 @@
-// pattern_engine.sv
-// Scans all NUM_PATTERNS each semiquaver tick.
-// For each pattern: fetches curr and prev columns from BRAM (one read each),
-// then fetches instrument_id from a small register file.
-// Fires note_on on rising edges, note_off on falling edges (GATED only).
-//
-// BRAM layout per pattern:
-//   address [0..63] ? pattern_col_t (48 bits: 6 x cell_t)
-//
-// Instrument register file: instrument_regs[NUM_PATTERNS] - written externally.
-//
-// Scan cost per pattern: ~4 cycles (EVAL_MUTE ? WAIT_CURR ? READ_PREV ?
-//   WAIT_PREV+FETCH_INSTR ? SCAN_NOTES x MAX_NOTES).
-// Total worst case: 10 patterns x ~10 cycles = ~100 cycles per semiquaver tick.
-// At 120 BPM: 12,500,000 cycles budget - comfortably fits.
-
 import daw_pkg::*;
 
 module patternEngine (
@@ -29,6 +13,7 @@ module patternEngine (
     
     input logic pause_pulse,
     input logic play_pulse,
+    input logic initial_step_pulse,
 
     output logic [5:0]                  current_playback_step, // Current playback position (for UI and RAM writer)
 
@@ -58,6 +43,8 @@ module patternEngine (
                     current_playback_step <= current_playback_step + 1'b1;
                 end else if (step_backward_pulse) begin
                     current_playback_step <= current_playback_step - 1'b1;
+                end else if (initial_step_pulse) begin
+                    current_playback_step <= '0;
                 end
             end
         end

@@ -44,6 +44,7 @@ module tamanduaBand (
     instrument_t                ui_active_instrument;
     note_delta_t                ui_active_note_slot;
     logic [3:0]                 current_octave;
+    logic [2:0]                 master_gain_shift;
     logic                       is_playing;
     logic                       step_forward_pulse;
     logic                       step_backward_pulse;
@@ -67,6 +68,7 @@ module tamanduaBand (
         .ui_active_instrument(ui_active_instrument),
         .ui_active_note_slot(ui_active_note_slot),
         .current_octave(current_octave),
+        .master_gain_shift,
         .bpm_out,
         .is_playing(is_playing),
         .step_forward_pulse(step_forward_pulse),
@@ -174,6 +176,7 @@ module tamanduaBand (
         .ui_active_instrument   (ui_active_instrument),
         .ui_active_note_slot    (ui_active_note_slot),
         .current_octave         (current_octave),
+        .master_gain_shift      (master_gain_shift),
         .is_playing             (is_playing),
         .mode_normal            (mode_normal),
         .mode_live              (mode_live),
@@ -229,6 +232,7 @@ module tamanduaBand (
         .tick_48khz, 
         
         .pause_pulse,
+        .master_gain_shift,
 
         .fifo_empty(fifo_empty),
         .fifo_dout(fifo_dout),
@@ -241,6 +245,7 @@ module tamanduaBand (
         .audio_out_valid(audio_out_valid)
     );
     
+     rs232transmitter transmitter (.clk, .rst(rstSync), .dataRdy(readEnable), .data(dataFifoOut), .busy, .TxD);
     
     i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(audio_out_valid), .sample, .mclk, .sclk, .lrclk, .sdata);
 

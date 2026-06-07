@@ -15,20 +15,23 @@ module dawController (
     output instrument_t              ui_active_instrument,
     output note_delta_t               ui_active_note_slot,
     output logic [3:0]               current_octave,
+    output logic [2:0]               master_gain_shift,
     output logic [7:0]               bpm_out,
     output logic                     is_playing,        // 1 = Sequencer running, 0 = Paused
     output logic step_forward_pulse,
     output logic step_backward_pulse,
+    output logic initial_step_pulse,
     
     output instrument_t                instrument_regs [NUM_PATTERNS],
     
-    // --- Mode Flags (For the Visualizer) ---
+    // mode flags for the visualizer
     output logic        mode_normal,
     output logic        mode_live,
     output logic        mode_record,
+    output logic        mode_export,
     
-    // --- Action Pulses ---
-    output logic        clear_pattern_pulse, // Tells the RAM to wipe the current pattern
+
+    output logic clear_pattern_pulse, // Tells the RAM to wipe the current pattern
     output logic live_valid,
     output note_event_t live_note
 );
@@ -105,7 +108,8 @@ module dawController (
         MODE_NORMAL, // Default, navigation, muting
         MODE_LIVE,   // live playing without recording new patterns
         MODE_RECORD_COUNTDOWN, // waiting for spacebar
-        MODE_RECORD  // pattern creation
+        MODE_RECORD,  // pattern creation
+        MODE_EXPORT
     } daw_mode_t;
 
     daw_mode_t current_mode;
@@ -113,12 +117,15 @@ module dawController (
     assign mode_normal = (current_mode == MODE_NORMAL);
     assign mode_live   = (current_mode == MODE_LIVE);
     assign mode_record = (current_mode == MODE_RECORD);
+    assign mode_export = (current_mode == MODE_EXPORT);
     
     assign ui_active_instrument = instrument_regs[ui_active_pattern];
 
-    //note_delta_t ui_active_note_slot;
     logic [4:0] countdown_timer;
-    logic       countdown_active;
+    logic countdown_active;
+    
+    logic [5:0] export_timer;
+    logic export_active;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -129,10 +136,12 @@ module dawController (
             is_playing           <= 1'b0;
             step_forward_pulse   <= '0;
             step_backward_pulse   <= '0;
+            initial_step_pulse <= '0;
             clear_pattern_pulse  <= 1'b0;
             live_note      <= '0;
             live_valid       <= 1'b0;
-            current_octave       <= 3'd4; 
+            current_octave       <= 3'd4;
+            master_gain_shift    <= 3'd1;
             ui_active_note_slot  <= 7'd60; // start at Do4        
             countdown_active     <= 1'b0;
             countdown_timer      <= '0;
@@ -146,6 +155,7 @@ module dawController (
             live_valid       <= 1'b0;
             step_forward_pulse  <= 1'b0;
             step_backward_pulse <= 1'b0;
+            initial_step_pulse <= '0;
 
             // RECORDING COUNTDOWN TIMER LOGIC
             // This runs independently of user input
@@ -161,11 +171,22 @@ module dawController (
             if (key_pressed) begin // keyboard input
 
                 // back to normal mode, pauses everything
-                if (active_scancode == 8'h76) begin // ESC
+                if (active_scancode == 8'h76 || current_mode != MODE_EXPORT) begin // ESC works if not export
                     current_mode <= MODE_NORMAL;
                     countdown_active <= 1'b0; // abort countdown if running
                 end else begin
                     case (current_mode)
+                        MODE_EXPORT: begin
+                            if (!export_active) begin
+                                initial_step_pulse <= 1;
+                                export_timer <= '0;
+                                export_active <= 1;
+                                is_playing <= 1;
+                            end else if (semiquaver_tick && export_timer == 6'd63) begin // export completed
+                                current_mode <= MODE_NORMAL;
+                            end     
+                        end
+                        
                         MODE_NORMAL: begin
                             case (active_scancode)
                                 // mode switch
@@ -196,7 +217,10 @@ module dawController (
                                 8'h3E: ui_active_pattern <= 4'd7;
                                 8'h46: ui_active_pattern <= 4'd8;
                                 8'h45: ui_active_pattern <= 4'd9;
-
+                                
+                                // master volume
+                                8'h2A: if (master_gain_shift > 3'd0) master_gain_shift <= master_gain_shift - 1'b1; // V
+                                8'h32: if (master_gain_shift < 3'd7) master_gain_shift <= master_gain_shift + 1'b1; // B
                                 
                                 // vim-like navigation
                                 8'h33: if (!is_playing) step_backward_pulse <= 1'b1; // H (step back)
@@ -246,6 +270,10 @@ module dawController (
                                 8'h33: if (!is_playing) step_backward_pulse <= 1'b1; // H (step back)
                                 8'h4B: if (!is_playing) step_forward_pulse  <= 1'b1; // L (step forward)
                                 
+                                // master volume
+                                8'h2A: if (master_gain_shift > 3'd0) master_gain_shift <= master_gain_shift - 1'b1; // V
+                                8'h32: if (master_gain_shift < 3'd7) master_gain_shift <= master_gain_shift + 1'b1; // B
+                                
                             endcase
                         end
                         
@@ -261,6 +289,10 @@ module dawController (
                                 end
                                 8'h41: if (current_octave > 0) current_octave <= current_octave - 1'b1; // ,
                                 8'h49: if (current_octave < 8) current_octave <= current_octave + 1'b1; // .
+                            
+                                // master volume
+                                8'h2A: if (master_gain_shift > 3'd0) master_gain_shift <= master_gain_shift - 1'b1; // V
+                                8'h32: if (master_gain_shift < 3'd7) master_gain_shift <= master_gain_shift + 1'b1; // B
 
                                 // A base pitch is calculated: (Octave * 12) + 12
                                 default: begin

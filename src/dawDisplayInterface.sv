@@ -18,6 +18,7 @@ module dawDisplayInterface #(
     input  instrument_t                 ui_active_instrument,
     input  note_delta_t                 ui_active_note_slot,
     input  logic [3:0]                  current_octave,
+    input  logic [2:0]                  master_gain_shift,
     input  logic                        is_playing,
     input  logic                        mode_normal,
     input  logic                        mode_live,
@@ -592,6 +593,18 @@ module dawDisplayInterface #(
         end
     endfunction
 
+    function automatic logic [7:0] volume_label_char(input int idx);
+        begin
+            unique case (idx)
+                0: volume_label_char = 8'h56; // V
+                1: volume_label_char = 8'h4F; // O
+                2: volume_label_char = 8'h4C; // L
+                3: volume_label_char = 8'h3A; // :
+                default: volume_label_char = 8'h20;
+            endcase
+        end
+    endfunction
+
     function automatic logic [7:0] bpm_label_char(
         input int idx,
         input logic [3:0] hundreds,
@@ -773,6 +786,23 @@ module dawDisplayInterface #(
             end
         end
 
+        // Volume bar under the octave label.
+        // master_gain_shift: 0 = normal, 1 = 2x, 2 = 4x, ...
+        // The bar has 8 segments; more green segments means higher master gain.
+        if ((pixel >= 10'd92) && (pixel < 10'd156) && (line >= 10'd56) && (line < 10'd64)) begin
+            local_x     = pixel - 10'd92;
+            btn_idx     = local_x >> 3;       // 8 segments, 8 px each
+            btn_local_x = local_x[2:0];
+
+            // segment border/gap = light gray
+            if ((line == 10'd56) || (line == 10'd63) || (btn_local_x == 0) || (btn_local_x == 7))
+                rgb_next = 12'h777;
+            else if (btn_idx <= master_gain_shift)
+                rgb_next = 12'h0D0;
+            else
+                rgb_next = 12'h333;
+        end
+
         // Text labels. Only one character is decoded per pixel.
         if ((line >= 10'd32) && (line < 10'd46)) begin
             // Top-left octave label: OCT:4
@@ -794,6 +824,18 @@ module dawDisplayInterface #(
                     char_x0        = 514 + char_idx*12;
                     char_y0        = 32;
                     ch             = bpm_label_char(char_idx, bpm_hundreds, bpm_tens, bpm_ones);
+                    text_candidate = 1'b1;
+                end
+            end
+        end else if ((line >= 10'd52) && (line < 10'd66)) begin
+            // Volume label under OCT. The green/gray bar is drawn to the right.
+            if ((pixel >= 10'd38) && (pixel < 10'd86)) begin
+                rel_x          = pixel - 10'd38;
+                char_idx       = char_idx_12(rel_x);
+                if (char_idx < 4) begin
+                    char_x0        = 38 + char_idx*12;
+                    char_y0        = 52;
+                    ch             = volume_label_char(char_idx);
                     text_candidate = 1'b1;
                 end
             end
@@ -839,13 +881,5 @@ module dawDisplayInterface #(
         if (text_hit)
             rgb_next = 12'hEEE;
     end
-    
-
-//    always_ff @(posedge clk) begin
-//        if (rst)
-//            rgb_reg <= '0;
-//        else 
-//            rgb_reg <= rgb_next;
-//    end
 
 endmodule
