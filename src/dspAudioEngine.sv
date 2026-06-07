@@ -202,14 +202,24 @@ module dspAudioEngine (
                     EVAL_VOICE: begin
                         if (scan_idx_state == NUM_VOICES) begin // Master Mixing and Normalization
                             logic signed [39:0] normalized;
-                            normalized = mixer_sum >>> 2; // Divide by 4 for headroom
-//                            normalized = mixer_sum;
-    
+//                            normalized = mixer_sum >>> 6; // Divide for headroom
+                
+//                            if (normalized > 40'sh7FFFFF) 
+//                                audio_out <= 24'sh7FFFFF; //max pos int 24
+//                            else if (normalized < -40'sh800000) 
+//                                audio_out <= -24'sh800000; //max neg int 24
+//                            else 
+//                                audio_out <= normalized[23:0];
+                            automatic logic signed [39:0] max_pos = 40'sd8388607;
+                            automatic logic signed [39:0] min_neg = -40'sd8388608;
                             
-                            if (normalized > 40'sh7FFFFF) 
-                                audio_out <= 24'sh7FFFFF; //max pos int 24
-                            else if (normalized < -40'sh800000) 
-                                audio_out <= -24'sh800000; //max neg int 24
+                            normalized = mixer_sum;
+
+                            
+                            if (normalized > max_pos) 
+                                audio_out <= 24'h7FFFFF; 
+                            else if (normalized < min_neg) 
+                                audio_out <= 24'h800000; 
                             else 
                                 audio_out <= normalized[23:0];
                             
@@ -244,7 +254,6 @@ module dspAudioEngine (
                             ENV_ATTACK: begin
                                 if (temp_vol >= 16'd65535 - active_meta_reg.attack_rate) begin
                                     temp_vol = 16'd65535;
-//                                    env_state[scan_idx_state] <= ENV_DECAY;
                                     active_env_state_reg <= ENV_DECAY;
                                 end else begin
                                     temp_vol = temp_vol + active_meta_reg.attack_rate;
@@ -256,7 +265,6 @@ module dspAudioEngine (
     
                                 if (temp_vol <= active_meta_reg.sustain_level + exp_drop) begin
                                     temp_vol = active_meta_reg.sustain_level;
-//                                    env_state[scan_idx_state] <= ENV_SUSTAIN;
                                     active_env_state_reg <= ENV_SUSTAIN;
                                 end else begin
                                     temp_vol = temp_vol - exp_drop;
@@ -288,7 +296,7 @@ module dspAudioEngine (
                     
                     MULTIPLY_DSP: begin
     
-                        dsp_mult_reg <= dsp_rom_reg * $signed({1'b0, dsp_vol_reg});
+                        dsp_mult_reg <= 40'($signed(dsp_rom_reg)) * $signed({1'b0, dsp_vol_reg});
     
                         env_level[scan_idx_level] <= dsp_vol_reg; // to reduce fanout we update it here even though we could've done it earlier
                         env_state[scan_idx_state] <= active_env_state_reg;

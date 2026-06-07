@@ -240,7 +240,7 @@ module tamanduaBand (
         .audio_out(sample),
         .audio_out_valid(audio_out_valid)
     );
-
+    
     
     i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(audio_out_valid), .sample, .mclk, .sclk, .lrclk, .sdata);
 

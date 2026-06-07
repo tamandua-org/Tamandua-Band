@@ -17,18 +17,19 @@ module bpmClockDivider #(
     
     localparam int unsigned TICKS_NUMERATOR = CLK_FREQ_HZ * 15; // 100'000'000 x 15
     
-    logic [31:0] period_rom [0:254];
+    logic [31:0] period_rom [0:255];
     initial begin
-        for (int i = 0; i <= 254; i++) begin
-            period_rom[i] = TICKS_NUMERATOR / (i+1);
+        period_rom[0] = 1;
+        for (int i = 1; i <= 255; i++) begin
+            period_rom[i] = TICKS_NUMERATOR / i;
         end
     end
 
-    logic [31:0] period;      
+    logic [31:0] period = TICKS_NUMERATOR / 120;
     logic [31:0] counter;
     
     always_ff @(posedge clk) begin
-        period <= period_rom[currentBpm-1];
+        period <= period_rom[currentBpm];
     end
  
     always_ff @(posedge clk) begin

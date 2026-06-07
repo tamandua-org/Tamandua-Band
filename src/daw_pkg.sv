@@ -90,9 +90,10 @@ package daw_pkg;
 //            SNARE: return '{24'd183, 24'd12182, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000};
             SYNTH: return '{24'd0, 24'd183, 24'd0, GATED,   16'd35,  16'd50, 16'd40000, 16'd40};
             BRASS: return '{24'd184, 24'd367, 24'd184, GATED,   16'd13,  16'd2,  16'd45874, 16'd3};
-            SNARE: return '{24'd368, 24'd12367, 24'd0, NATURAL, 16'd65000, 16'd0, 16'd65535, 16'd65000};
+//            SNARE: return '{24'd368, 24'd9967, 24'd0, NATURAL, 16'd65000, 16'd0, 16'd65535, 16'd65000};
+            SNARE: return '{24'd0, 24'd12434, 24'd0, NATURAL, 16'd60, 16'd15, 16'd45000, 16'd50};
             KICK:  return '{24'd11607,     24'd10000, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000}; 
-            PIANO: return '{24'd25000, 24'd80000, 24'd0,     GATED,   16'd5000,  16'd100,   16'd30000, 16'd500};   
+            PIANO: return '{24'd0, 24'd57463, 24'd25000,     GATED,   16'd5000,  16'd10,   16'd20000, 16'd10};   
               
             default: return '{24'd0, 24'd1000, 24'd0, NATURAL, 16'd65535, 16'd0, 16'd65535, 16'd65535};
         endcase

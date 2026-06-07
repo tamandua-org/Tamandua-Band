@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import signal
 
-def generate_master_rom(filename="master_rom.coe", sample_rate=48000):
+def generate_master_rom(filename="master_rom3.coe", sample_rate=48000):
     print("Compiling Master ROM...")
 
     # ---------------------------------------------------------
@@ -23,42 +23,30 @@ def generate_master_rom(filename="master_rom.coe", sample_rate=48000):
     # 3. SNARE (Analog 808-style, 12000 samples = 0.25 seconds)
     # ---------------------------------------------------------
 
-'''
-    snare_len = 12000
-    t_snare = np.linspace(0, 0.25, snare_len, endpoint=False)
+    snare_len = 9600
+    t_snare = np.linspace(0, 0.2, snare_len, endpoint=False)
     
-    # Body (Pitch sweep)
-    freqs = 150 + (100 * np.exp(-t_snare * 40))
-    phase = np.cumsum(freqs) / sample_rate * 2 * np.pi
-    body = np.sin(phase) * np.exp(-t_snare * 35)
+    # 1. The Stick Impact
+    # A microscopic, ultra-fast click (decay of 800!)
+    stick_transient = np.random.uniform(-1.0, 1.0, snare_len) * np.exp(-t_snare * 800)
     
-    # Snappy (Noise)
-    noise = np.random.uniform(-1.0, 1.0, snare_len) * np.exp(-t_snare * 15)
+    # 2. The Drum Body (Skin and Wood resonance)
+    # Fixed harmonic overtones instead of a laser pitch sweep.
+    # Fundamental tone around 200 Hz, secondary overtone around 340 Hz
+    body_fund = np.sin(2 * np.pi * 200 * t_snare) * np.exp(-t_snare * 40)
+    body_over = np.sin(2 * np.pi * 340 * t_snare) * np.exp(-t_snare * 50)
+    body = body_fund + (0.5 * body_over)
     
-    # Mix and normalize snare
-    snare_audio = ((body * 0.9) + (noise * 0.1) * 0.9)
-    snare_audio /= np.max(np.abs(snare_audio))
-'''
-    snare_len = 12000
-    t_snare = np.linspace(0, 0.25, snare_len, endpoint=False)
-    
-    # Body (The Crack: Sweeps from 350Hz to 180Hz very fast)
-    freqs = 180 + (170 * np.exp(-t_snare * 80))
-    phase = np.cumsum(freqs) / sample_rate * 2 * np.pi
-    body = np.sin(phase) * np.exp(-t_snare * 45) # Fast body decay
-    
-    # Snappy (The Wires: High-Pass Filtered Noise)
+    # 3. The Snare Wires
+    # Heavily filtered, extremely short decay (80) to kill the "reverb" illusion
     raw_noise = np.random.uniform(-1.0, 1.0, snare_len)
-    
-    # Create a 2000 Hz High-Pass Filter to remove muddy bass from the noise
-    sos = signal.butter(4, 2000, 'hp', fs=sample_rate, output='sos')
+    sos = signal.butter(4, 3000, 'hp', fs=sample_rate, output='sos')
     filtered_noise = signal.sosfilt(sos, raw_noise)
+    snappy = filtered_noise * np.exp(-t_snare * 80)
     
-    # Faster decay so it doesn't sound like lingering static
-    snappy = filtered_noise * np.exp(-t_snare * 28)
-    
-    # Mix (60% Body, 40% Snappy)
-    snare_audio = (body * 0.6) + (snappy * 0.4)
+    # Mix (Loud impact, solid body, very quiet wires)
+    # 20% Stick, 70% Body, 10% Wires
+    snare_audio = (stick_transient * 0.2) + (body * 0.7) + (snappy * 0.1)
     snare_audio /= np.max(np.abs(snare_audio)) # Normalize
 
     # ---------------------------------------------------------
