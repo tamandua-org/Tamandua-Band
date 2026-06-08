@@ -104,87 +104,118 @@ module dawController (
         end
     end
 
-    typedef enum logic [1:0] {
+    typedef enum logic [2:0] {
         MODE_NORMAL, // Default, navigation, muting
         MODE_LIVE,   // live playing without recording new patterns
         MODE_RECORD_COUNTDOWN, // waiting for spacebar
         MODE_RECORD,  // pattern creation
-        MODE_EXPORT
+        MODE_EXPORT // export the final mashup
     } daw_mode_t;
 
     daw_mode_t current_mode;
+        
+    logic [4:0] countdown_timer;
+    logic countdown_active;
+    
+    typedef enum logic { EXP_INIT, EXP_PROCESS } export_state_t;
+    export_state_t exp_state;
+    logic [5:0] export_timer;
     
     assign mode_normal = (current_mode == MODE_NORMAL);
     assign mode_live   = (current_mode == MODE_LIVE);
     assign mode_record = (current_mode == MODE_RECORD);
-    assign mode_export = (current_mode == MODE_EXPORT);
+    assign mode_export = (current_mode == MODE_EXPORT) && exp_state == EXP_PROCESS;
     
     assign ui_active_instrument = instrument_regs[ui_active_pattern];
 
-    logic [4:0] countdown_timer;
-    logic countdown_active;
-    
-    logic [5:0] export_timer;
-    logic export_active;
-
     always_ff @(posedge clk) begin
         if (rst) begin
-            current_mode         <= MODE_NORMAL;
-            mute_mask            <= '0; 
-            ui_active_pattern    <= '0;
-            bpm_out              <= 8'd120;
-            is_playing           <= 1'b0;
-            step_forward_pulse   <= '0;
-            step_backward_pulse   <= '0;
+            current_mode <= MODE_NORMAL;
+            mute_mask <= '0; 
+            ui_active_pattern <= '0;
+            bpm_out <= 8'd120;
+            is_playing <= 1'b0;
+            step_forward_pulse <= '0;
+            step_backward_pulse <= '0;
             initial_step_pulse <= '0;
-            clear_pattern_pulse  <= 1'b0;
-            live_note      <= '0;
-            live_valid       <= 1'b0;
-            current_octave       <= 3'd4;
-            master_gain_shift    <= 3'd1;
-            ui_active_note_slot  <= 7'd60; // start at Do4        
-            countdown_active     <= 1'b0;
-            countdown_timer      <= '0;
+            clear_pattern_pulse <= 1'b0;
+            live_note <= '0;
+            live_valid <= 1'b0;
+            current_octave <= 3'd4;
+            master_gain_shift <= 3'd1;
+            ui_active_note_slot <= 7'd60; // start at Do4        
+            countdown_active <= 1'b0;
+            countdown_timer<= '0;
+            exp_state <= EXP_INIT;
+            export_timer <= '0;
+            
             for (int i = 0; i < NUM_PATTERNS; i++)
                 instrument_regs[i] <= PIANO;
 
         end else begin
             // Reset 1-cycle pulses
             clear_pattern_pulse <= 1'b0;
-            live_note      <= '0;
-            live_valid       <= 1'b0;
-            step_forward_pulse  <= 1'b0;
+            live_note <= '0;
+            live_valid <= 1'b0;
+            step_forward_pulse <= 1'b0;
             step_backward_pulse <= 1'b0;
-            initial_step_pulse <= '0;
+            initial_step_pulse <= 1'b0;
 
-            // RECORDING COUNTDOWN TIMER LOGIC
-            // This runs independently of user input
+            // countdown logic runs independently of user input
             if (countdown_active && semiquaver_tick) begin
+                //TODO: add note playing every 4 semiquavers (countdown_timermod4) to include metronome at the start
+            
                 if (countdown_timer == 5'd0) begin
                     countdown_active <= 1'b0;
-                    is_playing       <= 1'b1;            // Start sequencer playback
-                    current_mode     <= MODE_RECORD;     // Push FSM into active recording state
+                    is_playing <= 1'b1;
+                    current_mode <= MODE_RECORD;
                 end else
                     countdown_timer <= countdown_timer - 1'b1;
             end
             
+            if (current_mode == MODE_EXPORT) begin
+                case (exp_state)
+                    EXP_INIT: begin //pause and go to the beginning (clears audioEngine)
+                        is_playing         <= 1'b0; 
+                        initial_step_pulse <= 1'b1; 
+                        export_timer <= '0;
+                        exp_state <= EXP_PROCESS;
+                    end
+                    
+                    EXP_PROCESS: begin //start exporting
+                        is_playing         <= 1'b1;  
+                        
+                        if (semiquaver_tick) begin
+                            export_timer <= export_timer + 1'b1;
+                            
+                            if (export_timer == 6'd63) begin 
+                                current_mode <= MODE_NORMAL;
+                                is_playing <= 1'b0;
+                                exp_state <= EXP_INIT;
+                                export_timer <= '0; //shouldnt be necessary but just in case
+                            end
+                        end
+                    end
+                endcase
+            end
+            
             if (key_pressed) begin // keyboard input
 
-                // back to normal mode, pauses everything
-                if (active_scancode == 8'h76 || current_mode != MODE_EXPORT) begin // ESC works if not export
+                if (active_scancode == 8'h76 && current_mode != MODE_EXPORT) begin // ESC works if not export
                     current_mode <= MODE_NORMAL;
                     countdown_active <= 1'b0; // abort countdown if running
                 end else begin
                     case (current_mode)
                         MODE_EXPORT: begin
-                            if (!export_active) begin
-                                initial_step_pulse <= 1;
-                                export_timer <= '0;
-                                export_active <= 1;
-                                is_playing <= 1;
-                            end else if (semiquaver_tick && export_timer == 6'd63) begin // export completed
-                                current_mode <= MODE_NORMAL;
-                            end     
+                            case (active_scancode)
+                                // master volume
+                                8'h2A: if (master_gain_shift > 3'd0) master_gain_shift <= master_gain_shift - 1'b1; // V
+                                8'h32: if (master_gain_shift < 3'd7) master_gain_shift <= master_gain_shift + 1'b1; // B
+                                
+                                // vim-like navigation
+                                8'h3B: if (ui_active_note_slot > 0) ui_active_note_slot <= ui_active_note_slot - 1; // J (Note Down)
+                                8'h42: if (ui_active_note_slot < 127) ui_active_note_slot <= ui_active_note_slot + 1; // K (Note Up)
+                            endcase
                         end
                         
                         MODE_NORMAL: begin
@@ -192,11 +223,18 @@ module dawController (
                                 // mode switch
                                 8'h2D: begin // R
                                     current_mode <= MODE_RECORD_COUNTDOWN; 
-                                    is_playing   <= 1'b0; // Pause playback
+                                    is_playing <= 1'b0; // Pause playback
                                 end
                                 8'h43: begin // I
                                     current_mode <= MODE_LIVE;   
-                                    is_playing   <= 1'b1; 
+                                    is_playing <= 1'b1; 
+                                end
+                                
+                                8'h24: begin // E
+                                    current_mode <= MODE_EXPORT;
+                                    exp_state<= EXP_INIT;
+                                    is_playing <= '0;
+                                    initial_step_pulse <= 1'b1; // same stuff as in the exp init but just in case
                                 end
                                 
                                 // playback 

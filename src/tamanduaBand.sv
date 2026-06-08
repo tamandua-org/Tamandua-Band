@@ -48,7 +48,9 @@ module tamanduaBand (
     logic                       is_playing;
     logic                       step_forward_pulse;
     logic                       step_backward_pulse;
-    logic                       mode_normal, mode_live, mode_record;
+    logic                       initial_step_pulse;
+
+    logic                       mode_normal, mode_live, mode_record, mode_export;
     logic                       clear_pattern_pulse;
     
     note_event_t                live_event; 
@@ -73,12 +75,14 @@ module tamanduaBand (
         .is_playing(is_playing),
         .step_forward_pulse(step_forward_pulse),
         .step_backward_pulse(step_backward_pulse),
+        .initial_step_pulse(initial_step_pulse),
         
         .instrument_regs,
         
         .mode_normal(mode_normal),
         .mode_live(mode_live),
         .mode_record(mode_record),
+        .mode_export(mode_export),
         
         .clear_pattern_pulse(clear_pattern_pulse),
         .live_valid(live_valid),
@@ -107,6 +111,7 @@ module tamanduaBand (
         .is_playing(is_playing),
         .step_forward_pulse(step_forward_pulse),
         .step_backward_pulse(step_backward_pulse),
+        .initial_step_pulse(initial_step_pulse),
         .mute_mask(mute_mask),
         
         .pause_pulse,
@@ -181,6 +186,7 @@ module tamanduaBand (
         .mode_normal            (mode_normal),
         .mode_live              (mode_live),
         .mode_record            (mode_record),
+        .export_active          (mode_export),
         .current_playback_step  (current_playback_step),
 
         .ui_req                 (ui_req),
@@ -245,8 +251,20 @@ module tamanduaBand (
         .audio_out_valid(audio_out_valid)
     );
     
-     rs232transmitter transmitter (.clk, .rst(rstSync), .dataRdy(readEnable), .data(dataFifoOut), .busy, .TxD);
+    audioExporter #(.FREQ_KHZ(FREQ_KHZ), .BAUDRATE(2_000_000)) 
+    exporter (
+        .clk(clk),
+        .rst(rstSync),
+        
+        .mode_export(mode_export),
+        .is_playing(is_playing),
+        
+        .audio_out_valid(audio_out_valid),
+        .sample(sample),
+        
+        .TxD(TxD)
+    );
     
-    i2s_transmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(audio_out_valid), .sample, .mclk, .sclk, .lrclk, .sdata);
+    i2stransmitter i2stransmitter (.clk100mhz(clk), .rst(rstSync), .ready(audio_out_valid), .sample, .mclk, .sclk, .lrclk, .sdata);
 
 endmodule

@@ -31,6 +31,7 @@ set_property -dict { PACKAGE_PIN B17 IOSTANDARD LVCMOS33 PULLUP true } [get_port
 
 set_property -dict { PACKAGE_PIN T18 IOSTANDARD LVCMOS33 } [get_ports rst];    # btnU
 
+set_property -dict { PACKAGE_PIN A18 IOSTANDARD LVCMOS33 } [get_ports TxD];
 
 ## Para debuggear
 #set_property -dict {PACKAGE_PIN W7 IOSTANDARD LVCMOS33} [get_ports {segs_n[6]}]

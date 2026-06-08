@@ -85,18 +85,12 @@ package daw_pkg;
     function automatic instrument_meta_t get_instrument_meta(input instrument_t inst);
         case (inst)
                     //     START      END        LOOP       MODE       A          D          S          R
-//            SYNTH: return '{24'd0,     24'd182,   24'd0,     GATED,   16'd35,  16'd50,    16'd40000, 16'd40}; 
-//            BRASS: return '{24'd0,     24'd182,   24'd0,     GATED,   16'd13,  16'd2,    16'd45874, 16'd1}; 
-//            SNARE: return '{24'd183, 24'd12182, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000};
-//            BRASS: return '{24'd184, 24'd367, 24'd184, GATED,   16'd13,  16'd2,  16'd45874, 16'd3};
-//            SNARE: return '{24'd368, 24'd9967, 24'd0, NATURAL, 16'd65000, 16'd0, 16'd65535, 16'd65000};
-            
-//            KICK:  return '{24'd11607,     24'd10000, 24'd0,     NATURAL, 16'd65000, 16'd0,     16'd65535, 16'd65000}; 
-            PIANO: return '{24'd0, 24'd37839, 24'd29000,     GATED,   16'd5000,  16'd3,   16'd10000, 16'd5}; 
+            PIANO: return '{24'd0, 24'd37839, 24'd29000,     GATED,   16'd5000,  16'd3,   16'd8500, 16'd5}; 
             SNARE: return '{24'd37840, 24'd50274, 24'd0, NATURAL, 16'd60, 16'd15, 16'd45000, 16'd50};
             HIHAT: return '{24'd50275, 24'd56640, 24'd0, NATURAL, 16'd60, 16'd15, 16'd45000, 16'd50};
             SYNTH: return '{24'd56641, 24'd57292, 24'd56966, GATED,   16'd35,  16'd50, 16'd40000, 16'd40};
             BRASS: return '{24'd56641, 24'd56966, 24'd56641, GATED,   16'd35,  16'd50, 16'd40000, 16'd40};
+            GUITAR: return '{24'd57293, 24'd64229, 24'd60761, GATED,   16'd12000,  16'd1, 16'd5000, 16'd2};
               
             default: return '{24'd0, 24'd1000, 24'd0, NATURAL, 16'd65535, 16'd0, 16'd65535, 16'd65535};
         endcase

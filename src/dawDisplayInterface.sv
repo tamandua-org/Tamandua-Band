@@ -23,6 +23,7 @@ module dawDisplayInterface #(
     input  logic                        mode_normal,
     input  logic                        mode_live,
     input  logic                        mode_record,
+    input  logic                        export_active,
     input  logic [5:0]                  current_playback_step,
 
     // patternRamWrapper UI port
@@ -646,8 +647,27 @@ module dawDisplayInterface #(
         end
     endfunction
 
+    function automatic logic [7:0] export_mode_char(input int idx);
+        begin
+            // EXPORTING
+            unique case (idx)
+                0: export_mode_char = 8'h45; // E
+                1: export_mode_char = 8'h58; // X
+                2: export_mode_char = 8'h50; // P
+                3: export_mode_char = 8'h4F; // O
+                4: export_mode_char = 8'h52; // R
+                5: export_mode_char = 8'h54; // T
+                6: export_mode_char = 8'h49; // I
+                7: export_mode_char = 8'h4E; // N
+                8: export_mode_char = 8'h47; // G
+                default: export_mode_char = 8'h20;
+            endcase
+        end
+    endfunction
+
     function automatic logic [7:0] mode_label_char(
         input int idx,
+        input logic export_active_i,
         input logic normal,
         input logic live,
         input logic record
@@ -660,7 +680,7 @@ module dawDisplayInterface #(
                 3: mode_label_char = 8'h45; // E
                 4: mode_label_char = 8'h3A; // :
                 5: mode_label_char = 8'h20;
-                default: mode_label_char = mode_char(normal, live, record, idx - 6);
+                default: mode_label_char = export_active_i ? export_mode_char(idx - 6) : mode_char(normal, live, record, idx - 6);
             endcase
         end
     endfunction
@@ -787,7 +807,7 @@ module dawDisplayInterface #(
         end
 
         // Volume bar under the octave label.
-        // master_gain_shift: 0 = normal, 1 = 2x, 2 = 4x, ...
+        // master_gain_shift uses the fine-gain table in dspAudioEngine.
         // The bar has 8 segments; more green segments means higher master gain.
         if ((pixel >= 10'd92) && (pixel < 10'd156) && (line >= 10'd56) && (line < 10'd64)) begin
             local_x     = pixel - 10'd92;
@@ -802,6 +822,7 @@ module dawDisplayInterface #(
             else
                 rgb_next = 12'h333;
         end
+
 
         // Text labels. Only one character is decoded per pixel.
         if ((line >= 10'd32) && (line < 10'd46)) begin
@@ -840,14 +861,14 @@ module dawDisplayInterface #(
                 end
             end
         end else if ((line >= 10'd408) && (line < 10'd422)) begin
-            // Bottom-left mode label: MODE: NORMAL/LIVE/RECORD/WAIT
-            if ((pixel >= 10'd38) && (pixel < 10'd182)) begin
+            // Bottom-left mode label. Export overrides the normal/live/record text.
+            if ((pixel >= 10'd38) && (pixel < 10'd218)) begin
                 rel_x          = pixel - 10'd38;
                 char_idx       = char_idx_12(rel_x);
-                if (char_idx < 12) begin
+                if (char_idx < 15) begin
                     char_x0        = 38 + char_idx*12;
                     char_y0        = 408;
-                    ch             = mode_label_char(char_idx, mode_normal, mode_live, mode_record);
+                    ch             = mode_label_char(char_idx, export_active, mode_normal, mode_live, mode_record);
                     text_candidate = 1'b1;
                 end
             end
