@@ -1,88 +1,98 @@
 module audioExporter #(
     parameter int FREQ_KHZ = 100_000,
-    parameter int BAUDRATE = 2_000_000
+    parameter int BAUDRATE = 921_600
+    // FIFO depth is set inside the exportFIFO IP.
+    // Target: ceil((48000 - BAUDRATE/20) × max_seconds) ? 32768 for 16 s
 )(
     input  logic        clk,
     input  logic        rst,
-
-    // Status flags from dawController
     input  logic        mode_export,
     input  logic        is_playing,
-
-    // Audio stream from dspAudioEngine
     input  logic        audio_out_valid,
     input  logic [23:0] sample,
-
-    // Physical UART Output
     output logic        TxD
 );
 
-    // --- Internal UART Signals ---
-    logic       readEnable;
-    logic [7:0] dataFifoOut;
-    logic       busy;
+    typedef enum logic [2:0] {
+        IDLE,
+        FETCH,                  // assert rd_en; fifo_dout valid next cycle
+        SEND_B0, WAIT_B0,
+        SEND_B1, WAIT_B1
+    } state_t;
+    state_t state;
 
-    // --- Export FSM Registers ---
-    logic [23:0] export_sample_reg;
 
-    typedef enum logic [2:0] { 
-        UART_IDLE, 
-        UART_START_B0, UART_WAIT_B0, 
-        UART_START_B1, UART_WAIT_B1, 
-        UART_START_B2, UART_WAIT_B2 
-    } uart_state_t;
+    logic        fifo_wr_en;
+    logic        fifo_rd_en;
+    logic        fifo_full;
+    logic        fifo_empty;
+    logic [15:0] fifo_dout;
 
-    uart_state_t uart_state;
+    assign fifo_wr_en = (state != IDLE) && is_playing && audio_out_valid && !fifo_full;
+    assign fifo_rd_en = (state == FETCH) && !fifo_empty;
+
+    exportFIFO exportQueue (
+        .clk   (clk),
+        .srst  (rst),               // reset only on hard reset; FSM drains before IDLE
+        .din   (sample[23:8]),      // top 16 bits of 24-bit sample
+        .wr_en (fifo_wr_en),
+        .rd_en (fifo_rd_en),
+        .dout  (fifo_dout),
+        .full  (fifo_full),
+        .empty (fifo_empty)
+    );
+
+
+    logic        readEnable;
+    logic [7:0]  dataOut;
+    logic        busy;
+    logic [15:0] tx_reg;
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            uart_state <= UART_IDLE;
-            readEnable <= 1'b0;
-            export_sample_reg <= '0;
-            dataFifoOut <= '0;
+            state      <= IDLE;
+            readEnable <= '0;
+            dataOut    <= '0;
+            tx_reg     <= '0;
         end else begin
-            readEnable <= 1'b0; // Default off to ensure clean 1-cycle pulses
+            readEnable <= '0;
 
-            case (uart_state)
-                UART_IDLE: begin
-                    // Lock the sample when the engine is actively playing in export mode
-                    if (mode_export && is_playing && audio_out_valid) begin
-                        export_sample_reg <= sample; 
-                        uart_state        <= UART_START_B0;
-                    end
+            case (state)
+                IDLE: begin
+                    if (mode_export && is_playing)
+                        state <= FETCH;
                 end
-                
-                // --- SEND BYTE 0 (LSB First for native .wav compatibility) ---
-                UART_START_B0: begin
-                    if (!busy) begin
-                        dataFifoOut <= export_sample_reg[7:0];
-                        readEnable  <= 1'b1;
-                        uart_state  <= UART_WAIT_B0;
-                    end
-                end
-                // Wait for the UART to acknowledge the byte and raise the busy flag
-                UART_WAIT_B0: if (busy) uart_state <= UART_START_B1; 
 
-                // --- SEND BYTE 1 (Middle) ---
-                UART_START_B1: begin
-                    if (!busy) begin
-                        dataFifoOut <= export_sample_reg[15:8];
-                        readEnable  <= 1'b1;
-                        uart_state  <= UART_WAIT_B1;
-                    end
+                FETCH: begin
+                    if (!fifo_empty)
+                        state <= SEND_B0;       // rd_en fired; dout valid next cycle
+                    else if (!is_playing)
+                        state <= IDLE;          // drained and done
+                    // else: FIFO empty but still playing - spin and wait
                 end
-                UART_WAIT_B1: if (busy) uart_state <= UART_START_B2;
 
-                // --- SEND BYTE 2 (MSB Last) ---
-                UART_START_B2: begin
+                SEND_B0: begin                  // fifo_dout valid here
                     if (!busy) begin
-                        dataFifoOut <= export_sample_reg[23:16];
-                        readEnable  <= 1'b1;
-                        uart_state  <= UART_WAIT_B2;
+                        tx_reg     <= fifo_dout;
+                        dataOut    <= fifo_dout[7:0];   // LSB first ? WAV little-endian
+                        readEnable <= 1'b1;
+                        state      <= WAIT_B0;
                     end
                 end
-                // Once the final byte is acknowledged, wait for the next audio sample
-                UART_WAIT_B2: if (busy) uart_state <= UART_IDLE; 
+
+                WAIT_B0: if (busy) state <= SEND_B1;
+
+                SEND_B1: begin
+                    if (!busy) begin
+                        dataOut    <= tx_reg[15:8];     // MSB
+                        readEnable <= 1'b1;
+                        state      <= WAIT_B1;
+                    end
+                end
+
+                WAIT_B1: if (busy) state <= FETCH;
+
+                default: state <= IDLE;
             endcase
         end
     end
@@ -91,12 +101,11 @@ module audioExporter #(
         .FREQ_KHZ(FREQ_KHZ),
         .BAUDRATE(BAUDRATE)
     ) transmitter (
-        .clk(clk), 
-        .rst(rst), 
-        .dataRdy(readEnable), 
-        .data(dataFifoOut), 
-        .busy(busy), 
-        .TxD(TxD)
+        .clk    (clk),
+        .rst    (rst),
+        .dataRdy(readEnable),
+        .data   (dataOut),
+        .busy   (busy),
+        .TxD    (TxD)
     );
-
 endmodule

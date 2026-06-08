@@ -12,7 +12,9 @@ module tamanduaBand (
     output logic        sdata,
     output logic        hSync,
     output logic        vSync,
-    output logic [11:0] RGB
+    output logic [11:0] RGB,
+    
+    output logic TxD
 );
 
     localparam int FREQ_KHZ = 100_000;
